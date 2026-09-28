@@ -43,43 +43,15 @@ Build instructions and project requirements are included with the source code.
 
 ## Credits
 
-CafeRecomp builds on research and work shared by several open-source emulation and recompilation projects.
+Special thanks to the projects and developers whose work helped make CafeRecomp possible:
 
-### [DolRecomp](https://github.com/ExpansionPak/DolRecomp)
+- [DolRecomp](https://github.com/ExpansionPak/DolRecomp) — base recompilation framework
+- [Cemu](https://github.com/cemu-project/Cemu) — Wii U and rendering reference
+- [gx2gl](https://github.com/ExpansionPak/gx2gl) — GX2 graphics reference
+- [Aurora](https://github.com/encounter/aurora)
+- [ModernGekko-Template](https://github.com/ExpansionPak/ModernGekko-Template)
 
-A huge thank you to the DolRecomp developers and contributors.
-
-**CafeRecomp uses DolRecomp as the base for its static recompilation framework.** Their work provided the foundation that made CafeRecomp possible without having to build the entire recompilation system from scratch.
-
-### [Cemu](https://github.com/cemu-project/Cemu)
-
-A huge thank you to the Cemu developers and contributors.
-
-Cemu has been an invaluable reference for **Wii U graphics, GX2 behavior, rendering, and system behavior** while developing CafeRecomp's renderer and runtime.
-
-### [gx2gl](https://github.com/ExpansionPak/gx2gl)
-
-Thanks to the gx2gl developers and contributors for their work on Wii U GX2 graphics translation.
-
-Their work has been a useful reference while developing CafeRecomp's graphics support.
-
-### [Aurora](https://github.com/encounter/aurora)
-
-Thanks to the Aurora developers and contributors for making their work and research available to the community.
-
-### [ModernGekko-Template](https://github.com/ExpansionPak/ModernGekko-Template)
-
-Thanks to the developers and contributors behind ModernGekko-Template for their work on recompilation project structure and tooling.
-
-Special thanks to everyone in the emulation, reverse-engineering, preservation, and static recompilation communities who shares their research and source code.
-
-## Status
-
-CafeRecomp is still in active development.
-
-Compatibility is limited, and bugs, crashes, missing graphics, and incomplete functionality should be expected.
-
-Breath of the Wild is the current main target, but the CafeRecomp framework is designed to be reused for other Wii U projects and games.
+Thank you to everyone who contributed to these projects and shared their work with the community.
 
 ## Disclaimer
 
