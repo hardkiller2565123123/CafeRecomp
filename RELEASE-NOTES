@@ -1,0 +1,20 @@
+CafeRecomp - source-only development snapshot
+
+Not a playable release. The latest full game test still shows a yellow screen.
+Folder relocation passed 20 regression tests; that does not verify gameplay.
+
+Game data, generated game code, runtime DLLs, captures, logs, personal settings,
+and Git histories are deliberately excluded. No release has been published.
+
+Supply your own North American Wii U base game, v208 update, and DLC in
+game/base, game/update, and game/dlc. Build the bundled DolRecomp source,
+then run generate.ps1 and build.ps1 with the Visual Studio C++ tools installed.
+Generation and compilation require substantial disk space and time.
+
+Bundled DolRecomp source is based on:
+https://github.com/ExpansionPak/DolRecomp
+commit 1bec3554ecc4817cf78319ca3d8a0669477f29fa
+Local modifications to emitter.c, cpu.c, and cpu.h are included.
+Cemu-derived renderer code retains its source notices and MPL license.
+See the included dependency license files. CMakeLists.txt files are retained
+because CMake requires their exact filenames; other .txt and .md files are absent.

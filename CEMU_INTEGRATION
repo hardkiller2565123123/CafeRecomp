@@ -1,0 +1,23 @@
+# Cemu Integration Notes
+
+The source checkout at `third_party/Cemu` is the upstream Cemu project at
+commit `13d1826b4d018c2b6674f58b9b772e21ba084f61`.
+
+`src/wiiu_gx2_cemu_layout.c` is an MPL-2.0 adaptation of Cemu's
+`LatteTextureLoader` layout handling. The recomp renderer uses it to address
+GX2 block-compressed texture surfaces with the same coordinate convention as
+Cemu's Latte renderer. Keep the MPL-2.0 notice with that file when it is
+redistributed.
+
+The standalone renderer also follows Cemu's documented Latte texture behavior
+for packed R5_G6_B5 channel order, GX2 `compSel` component routing, and
+frame-boundary texture-cache freshness. Those pieces are native code in
+`src/wiiu_gx2_software.c` and
+`src/wiiu_gx2.c`; no Cemu executable, library, or renderer is linked or run.
+
+`src/wiiu_latte_vertex.c` is a new native shader-program decoder. It reads the
+Wii U shader bytecode supplied by the recompiled game, recognizes GX2's
+four-row DOT4 vertex transform pattern, and applies the game's live uniform
+values. It was written for this project from observed GX2 behavior and Cemu's
+public Latte instruction documentation; it does not compile, link, or call
+the Cemu renderer.
