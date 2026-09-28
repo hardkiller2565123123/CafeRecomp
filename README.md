@@ -35,17 +35,6 @@ Current work includes:
 
 CafeRecomp is still in active development, and many parts of the Wii U environment are still being implemented.
 
-## Goals
-
-- Run recompiled Wii U software natively on modern PCs
-- Provide a reusable framework for different Wii U games
-- Reproduce Wii U runtime behavior
-- Support Wii U GX2 graphics
-- Improve Breath of the Wild compatibility
-- Support additional Wii U titles
-- Keep the framework clean and maintainable
-- Keep the project open source
-
 ## Building
 
 CafeRecomp is currently intended for development and testing.
