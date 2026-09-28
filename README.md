@@ -48,8 +48,8 @@ Special thanks to the projects and developers whose work helped make CafeRecomp 
 - [DolRecomp](https://github.com/ExpansionPak/DolRecomp) — base recompilation framework
 - [Cemu](https://github.com/cemu-project/Cemu) — Wii U and rendering reference
 - [gx2gl](https://github.com/ExpansionPak/gx2gl) — GX2 graphics reference
-- [Aurora](https://github.com/encounter/aurora)
-- [ModernGekko-Template](https://github.com/ExpansionPak/ModernGekko-Template)
+- [Aurora](https://github.com/encounter/aurora) — GX2 Rendering
+- [ModernGekko-Template](https://github.com/ExpansionPak/ModernGekko-Template) - just Exist
 
 Thank you to everyone who contributed to these projects and shared their work with the community.
 
