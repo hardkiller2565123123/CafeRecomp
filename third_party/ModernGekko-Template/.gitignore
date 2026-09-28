@@ -1,0 +1,14 @@
+iso/
+extracted/
+generated/
+build/
+extern/
+database/
+build-*/
+cmake-build-*/
+CMakeUserPresets.json
+.cache/
+
+# OS
+.DS_Store
+Thumbs.db

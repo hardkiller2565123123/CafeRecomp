@@ -1,0 +1,6 @@
+[submodule "lib/ModernGekko"]
+	path = lib/ModernGekko
+	url = https://github.com/ExpansionPak/ModernGekko.git
+[submodule "lib/DolRecomp"]
+	path = lib/DolRecomp
+	url = https://github.com/ExpansionPak/DolRecomp.git

@@ -1,0 +1,294 @@
+#include "Cafe/OS/common/OSCommon.h"
+#include "Cafe/HW/Espresso/PPCCallback.h"
+#include "Cafe/OS/RPL/rpl.h"
+#include "Cafe/OS/RPL/rpl_structs.h"
+#include "Cafe/OS/libs/coreinit/coreinit_DynLoad.h"
+#include "Cafe/OS/libs/coreinit/coreinit_MEM.h"
+
+namespace coreinit
+{
+	MPTR _osDynLoadFuncAlloc = MPTR_NULL;
+	MPTR _osDynLoadFuncFree = MPTR_NULL;
+	MPTR _osDynLoadTLSFuncAlloc = MPTR_NULL;
+	MPTR _osDynLoadTLSFuncFree = MPTR_NULL;
+
+	static std::vector<NotifyCallbackEntry> notifyCallbacks;
+
+	uint32 OSDynLoad_SetAllocator(MPTR allocFunc, MPTR freeFunc)
+	{
+		_osDynLoadFuncAlloc = allocFunc;
+		_osDynLoadFuncFree = freeFunc;
+		return 0;
+	}
+
+	void OSDynLoad_SetTLSAllocator(MPTR allocFunc, MPTR freeFunc)
+	{
+		_osDynLoadTLSFuncAlloc = allocFunc;
+		_osDynLoadTLSFuncFree = freeFunc;
+	}
+
+	uint32 OSDynLoad_GetAllocator(betype<MPTR>* funcAlloc, betype<MPTR>* funcFree)
+	{
+		*funcAlloc = _osDynLoadFuncAlloc;
+		*funcFree = _osDynLoadFuncFree;
+		return 0;
+	}
+
+	void OSDynLoad_GetTLSAllocator(betype<MPTR>* funcAlloc, betype<MPTR>* funcFree)
+	{
+		*funcAlloc = _osDynLoadTLSFuncAlloc;
+		*funcFree = _osDynLoadTLSFuncFree;
+	}
+
+	void* OSDynLoad_AllocatorAlloc(sint32 size, sint32 alignment)
+	{
+		if (_osDynLoadFuncAlloc == MPTR_NULL)
+			return MPTR_NULL;
+		StackAllocator<MEMPTR<void>> _ptrStorage;
+		int r = PPCCoreCallback(_osDynLoadFuncAlloc, size, alignment, _ptrStorage.GetMPTR());
+		if (r != 0)
+		{
+			cemu_assert_debug(false);
+			return MPTR_NULL;
+		}
+		return _ptrStorage->GetPtr();
+	}
+
+	void OSDynLoad_AllocatorFree(void* mem)
+	{
+		if (_osDynLoadFuncFree == MPTR_NULL)
+			return;
+		MEMPTR<void> _mem = mem;
+		PPCCoreCallback(_osDynLoadFuncFree, _mem);
+	}
+
+	uint32 OSDynLoad_AcquireInternal(const char* libName, uint32be* moduleHandleOut, bool checkOnly)
+	{
+		// truncate path
+		sint32 fileNameStartIndex = 0;
+		sint32 tempLen = (sint32)strlen(libName);
+		for (sint32 i = tempLen - 1; i >= 0; i--)
+		{
+			if (libName[i] == '/')
+			{
+				fileNameStartIndex = i + 1;
+				break;
+			}
+		}
+		// truncate file extension
+		char tempLibName[512];
+		strcpy(tempLibName, libName + fileNameStartIndex);
+		tempLen = (sint32)strlen(tempLibName);
+		for (sint32 i = tempLen - 1; i >= 0; i--)
+		{
+			if (tempLibName[i] == '.')
+			{
+				tempLibName[i] = '\0';
+				break;
+			}
+		}
+		// search for loaded modules with matching name
+		uint32 rplHandle = RPLLoader_GetHandleByModuleName(libName);
+		if (rplHandle == RPL_INVALID_HANDLE && !RPLLoader_HasDependency(libName))
+		{
+			if (checkOnly)
+			{
+				*moduleHandleOut = 0;
+				return 0;
+			}
+			RPLLoader_AddDependency(libName);
+			RPLLoader_UpdateDependencies();
+			RPLLoader_Link();
+			RPLLoader_CallEntrypoints();
+			rplHandle = RPLLoader_GetHandleByModuleName(libName);
+		}
+		if (rplHandle == RPL_INVALID_HANDLE)
+			*moduleHandleOut = 0;
+		else
+			*moduleHandleOut = rplHandle;
+		if (rplHandle == RPL_INVALID_HANDLE)
+		{
+			cemuLog_logDebug(LogType::Force, "OSDynLoad_Acquire() failed to load module '{}'", libName);
+			return 0xFFFCFFE9; // module not found
+		}
+
+		for (const auto& cb : notifyCallbacks) 
+		{
+			MEMPTR<OSDynLoad_NotifyData> notifyData;
+			notifyData = (OSDynLoad_NotifyData*)OSDynLoad_AllocatorAlloc(sizeof(OSDynLoad_NotifyData), 4);
+			RPLModule* module = RPLLoader_GetModuleByName(tempLibName);
+
+			if (!module) 
+				break;
+
+			notifyData->name = module->ppcName.GetMPTR();
+
+			notifyData->textAddr = module->regionMappingBase_text.GetBEValue();
+			notifyData->textOffset = module->regionMappingBase_text.GetMPTR() - module->regionOrigAddr_text;
+			notifyData->textSize = module->regionSize_text;
+
+			notifyData->dataAddr = module->regionMappingBase_data;
+			notifyData->dataOffset = module->regionMappingBase_data - module->regionOrigAddr_data;
+			notifyData->dataSize = module->regionSize_data;
+
+			notifyData->readAddr = module->regionMappingBase_data;
+			notifyData->readOffset = module->regionMappingBase_data - module->regionOrigAddr_data;
+			notifyData->readSize = module->regionSize_data;
+
+			PPCCoreCallback(cb.callback, moduleHandleOut, cb.userContext.GetMPTR(), 1, notifyData.GetMPTR());
+			OSDynLoad_AllocatorFree(notifyData);
+
+		}
+		return 0;
+	}
+
+	uint32 OSDynLoad_Acquire(const char* libName, uint32be* moduleHandleOut)
+	{
+		return OSDynLoad_AcquireInternal(libName, moduleHandleOut, false);
+	}
+
+	void OSDynLoad_Release(uint32 moduleHandle)
+	{
+		if (moduleHandle == RPL_INVALID_HANDLE)
+			return;
+
+		for (const auto& cb : notifyCallbacks) 
+		{
+			MEMPTR<OSDynLoad_NotifyData> notifyData;
+			notifyData = (OSDynLoad_NotifyData*)OSDynLoad_AllocatorAlloc(sizeof(OSDynLoad_NotifyData), 4);
+			RPLModule* module = RPLLoader_GetModuleByName(RPLLoader_GetModuleNameByHandle(moduleHandle));
+
+			if (!module) 
+				break;
+
+			notifyData->name = module->ppcName.GetMPTR();
+
+			notifyData->textAddr = module->regionMappingBase_text.GetBEValue();
+			notifyData->textOffset = module->regionMappingBase_text.GetMPTR() - module->regionOrigAddr_text;
+			notifyData->textSize = module->regionSize_text;
+
+			notifyData->dataAddr = module->regionMappingBase_data;
+			notifyData->dataOffset = module->regionMappingBase_data - module->regionOrigAddr_data;
+			notifyData->dataSize = module->regionSize_data;
+
+			notifyData->readAddr = module->regionMappingBase_data;
+			notifyData->readOffset = module->regionMappingBase_data - module->regionOrigAddr_data;
+			notifyData->readSize = module->regionSize_data;
+
+			PPCCoreCallback(cb.callback, moduleHandle, cb.userContext.GetMPTR(), 2, notifyData.GetMPTR());
+			OSDynLoad_AllocatorFree(notifyData);
+
+		}
+
+		RPLLoader_RemoveDependency(moduleHandle);
+		RPLLoader_UpdateDependencies();
+	}
+
+	uint32 OSDynLoad_IsModuleLoaded(const char* libName, uint32be* moduleHandleOut)
+	{
+		return OSDynLoad_AcquireInternal(libName, moduleHandleOut, true);
+	}
+
+	uint32 OSDynLoad_FindExport(uint32 moduleHandle, uint32 isData, const char* exportName, betype<MPTR>* addrOut)
+	{
+		if (moduleHandle == 0xFFFFFFFF)
+		{
+			// main module
+			// Assassins Creed 4 has this handle hardcoded
+			moduleHandle = RPLLoader_GetMainModuleHandle();
+		}
+
+		MPTR exportResult = RPLLoader_FindModuleOrHLEExport(moduleHandle, isData, exportName);
+		*addrOut = exportResult;
+
+		if (exportResult == MPTR_NULL)
+			return 0xFFFFFFFF;
+		return 0;
+	}
+
+	uint32 OSDynLoad_GetModuleName(uint32 moduleHandle, char* nameBuf, sint32be* nameBufSize) 
+	{
+		if (moduleHandle == 0xFFFFFFFF)
+		{
+			// main module
+			// Assassins Creed 4 has this handle hardcoded
+			moduleHandle = RPLLoader_GetMainModuleHandle();
+		}
+
+		const std::string moduleName = RPLLoader_GetModuleNameByHandle(moduleHandle);
+		std::strncpy(nameBuf, moduleName.c_str(), *nameBufSize);
+
+		return 0;
+
+	}
+
+	sint32 OSDynLoad_GetNumberOfRPLs()
+	{
+		return RPLLoader_GetModuleCount();
+	}
+
+	uint32 OSDynLoad_GetRPLInfo(uint32 first, uint32 count, OSDynLoad_NotifyData* outInfos) 
+	{
+		if (count == 0)
+			return 1;
+		RPLModule** modules = RPLLoader_GetModuleList();
+
+		for (uint32 i = first; i < count; i++)
+		{	
+			outInfos[i].name = modules[i]->ppcName.GetMPTR();
+
+			outInfos[i].textAddr = modules[i]->regionMappingBase_text.GetBEValue();
+			outInfos[i].textOffset = modules[i]->regionMappingBase_text.GetMPTR() - modules[i]->regionOrigAddr_text;
+			outInfos[i].textSize = modules[i]->regionSize_text;
+
+			outInfos[i].dataAddr = modules[i]->regionMappingBase_data;
+			outInfos[i].dataOffset = modules[i]->regionMappingBase_data - modules[i]->regionOrigAddr_data;
+			outInfos[i].dataSize = modules[i]->regionSize_data;
+
+			outInfos[i].readAddr = modules[i]->regionMappingBase_data;
+			outInfos[i].readOffset = modules[i]->regionMappingBase_data - modules[i]->regionOrigAddr_data;
+			outInfos[i].readSize = modules[i]->regionSize_data;
+
+		}
+
+		return 1;
+	}
+
+	uint32 OSDynLoad_AddNotifyCallback(MEMPTR<OSDynLoadNotifyFunc> notifyFn, MEMPTR<void> userContext)
+	{
+		if (!notifyFn)
+			return 0xBAD1000E; // notify function pointer is null
+
+		notifyCallbacks.emplace_back(notifyFn, userContext);
+		return 0;
+	}
+
+	uint32 OSDynLoad_DelNotifyCallback(MEMPTR<OSDynLoadNotifyFunc> notifyFn, MEMPTR<void> userContext) 
+	{
+		std::erase_if(notifyCallbacks, [&](const NotifyCallbackEntry& entry) 
+		{
+			return entry.callback.GetMPTR() == notifyFn.GetMPTR() && entry.userContext == userContext;
+		});
+
+		return 0;
+	}
+
+	void InitializeDynLoad()
+	{
+		cafeExportRegister("coreinit", OSDynLoad_SetAllocator, LogType::Placeholder);
+		cafeExportRegister("coreinit", OSDynLoad_SetTLSAllocator, LogType::Placeholder);
+		cafeExportRegister("coreinit", OSDynLoad_GetAllocator, LogType::Placeholder);
+		cafeExportRegister("coreinit", OSDynLoad_GetTLSAllocator, LogType::Placeholder);
+
+		cafeExportRegister("coreinit", OSDynLoad_Acquire, LogType::Placeholder);
+		cafeExportRegister("coreinit", OSDynLoad_Release, LogType::Placeholder);
+		cafeExportRegister("coreinit", OSDynLoad_IsModuleLoaded, LogType::Placeholder);
+		cafeExportRegister("coreinit", OSDynLoad_FindExport, LogType::Placeholder);
+		cafeExportRegister("coreinit", OSDynLoad_GetModuleName, LogType::Placeholder);
+		cafeExportRegister("coreinit", OSDynLoad_GetNumberOfRPLs, LogType::Placeholder);
+		cafeExportRegister("coreinit", OSDynLoad_GetRPLInfo, LogType::Placeholder);
+
+		cafeExportRegister("coreinit", OSDynLoad_AddNotifyCallback, LogType::Placeholder);
+		cafeExportRegister("coreinit", OSDynLoad_DelNotifyCallback, LogType::Placeholder);
+	}
+}

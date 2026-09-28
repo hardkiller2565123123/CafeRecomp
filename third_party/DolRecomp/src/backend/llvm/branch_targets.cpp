@@ -1,0 +1,228 @@
+#include "backend/llvm/emitter.h"
+#include "cpu/cpu.h"
+
+#include <cstdio>
+
+#include <llvm/ADT/SmallVector.h>
+#include <llvm/IR/BasicBlock.h>
+#include <llvm/IR/Function.h>
+#include <llvm/IR/Module.h>
+#include <llvm/Support/Format.h>
+#include <llvm/Support/raw_ostream.h>
+
+namespace dolllvm {
+
+using namespace llvm;
+
+BasicBlock *FunctionEmitter::directDestination(const DolIRTerminator &term,
+                                               u32 slot) {
+  if (term.targets[slot] != DOLIR_NO_BLOCK) {
+    if (source_.blocks[term.targets[slot]].terminator.kind ==
+        DOLIR_TERM_FALLBACK)
+      return fallbackEdge(term.target_addresses[slot]);
+    return blocks_[term.targets[slot]];
+  }
+  return externalDestination(term, slot);
+}
+
+const DolLLVMFunctionRange *FunctionEmitter::rangeFor(u32 address) const {
+  for (u32 i = 0; i < range_count_; i++)
+    if (address >= ranges_[i].start && address < ranges_[i].end)
+      return &ranges_[i];
+  return nullptr;
+}
+
+BasicBlock *FunctionEmitter::externalDestination(const DolIRTerminator &term,
+                                                 u32 slot) {
+  u32 target = term.target_addresses[slot];
+  const DolLLVMFunctionRange *range = rangeFor(target);
+  if (!range)
+    return nullptr;
+  const bool nativeTarget =
+      (range->abi_flags & DOLLLVM_FUNCTION_ABI_NATIVE) != 0;
+  if (native_abi_ && !nativeTarget)
+    return nullptr;
+  if (!native_abi_ && nativeTarget && cold_escapes_)
+    return nullptr;
+  if (nativeTarget) {
+    for (u32 state = 0; state < DOLIR_STATE_COUNT; state++) {
+      auto stateSlot = static_cast<DolIRStateSlot>(state);
+      if (stateInput(range, stateSlot) && !state_[state])
+        return nullptr;
+    }
+  }
+  BasicBlock *callBlock = BasicBlock::Create(
+      context_, term.linked ? "direct_call" : "direct_tail", function_);
+  IRBuilderBase::InsertPoint saved = builder_.saveIP();
+  builder_.SetInsertPoint(callBlock);
+  emitBudgetGuard(target);
+  char name[64];
+  snprintf(name, sizeof(name), "func_%08X_budget", range->start);
+  const std::string targetName = symbolName(name);
+  if (!nativeTarget)
+    syncDirtyState();
+  const bool cyclesInResult = nativeTarget && nativeCyclesInResult(range);
+  if (!cyclesInResult)
+    flushCallCounters(true);
+  auto callee =
+      module_.getOrInsertFunction(targetName, bodyFunctionType(range));
+  if (auto *calleeFunction = dyn_cast<Function>(callee.getCallee())) {
+    calleeFunction->setCallingConv(bodyCallingConvention());
+    calleeFunction->setVisibility(GlobalValue::HiddenVisibility);
+    calleeFunction->setDSOLocal(true);
+  }
+  Value *calleeReturnPC =
+      term.linked ? static_cast<Value *>(builder_.getInt32(term.guest_pc + 4u))
+                  : return_pc_;
+  Value *control = builder_.CreateOr(
+      builder_.CreateZExt(builder_.getInt32(target),
+                          Type::getInt64Ty(context_)),
+      builder_.CreateShl(
+          builder_.CreateZExt(calleeReturnPC, Type::getInt64Ty(context_)),
+          builder_.getInt64(32)));
+  SmallVector<Value *, 32> arguments = {ctx_, chain_, control};
+  if (nativeTarget) {
+    if (cyclesInResult)
+      arguments.push_back(
+          builder_.CreateLoad(Type::getInt64Ty(context_), cycles_));
+    for (u32 state = 0; state < DOLIR_STATE_COUNT; state++) {
+      auto stateSlot = static_cast<DolIRStateSlot>(state);
+      if (stateInput(range, stateSlot))
+        arguments.push_back(stateValue(stateSlot));
+    }
+  }
+  CallInst *nativeCall = builder_.CreateCall(callee, arguments);
+  nativeCall->setCallingConv(bodyCallingConvention());
+  if (nativeTarget) {
+    if (!cyclesInResult)
+      reloadCallCounters();
+    acceptNativeResult(nativeCall, range);
+    if (cold_escapes_) {
+      if (!term.linked) {
+        if (native_abi_) {
+          returnNative(return_pc_);
+        } else {
+          materialize(return_pc_);
+          returnFromBody();
+        }
+        builder_.restoreIP(saved);
+        return callBlock;
+      }
+      const u32 continuation = term.guest_pc + 4u;
+      const bool local = continuation >= source_.guest_start &&
+                         continuation < source_.guest_end &&
+                         ((continuation - source_.guest_start) & 3u) == 0;
+      const u32 continuationBlock =
+          local ? (continuation - source_.guest_start) / 4u : 0u;
+      if (!local || continuationBlock >= blocks_.size()) {
+        sideExit(continuation);
+      } else {
+        builder_.CreateBr(blocks_[continuationBlock]);
+      }
+      builder_.restoreIP(saved);
+      return callBlock;
+    }
+    Value *returnedPC = nativeResultPC(nativeCall);
+    Value *continues = nativeResultContinues(nativeCall);
+    if (!term.linked) {
+      if (native_abi_) {
+        BasicBlock *forward =
+            BasicBlock::Create(context_, "tail_forward", function_);
+        BasicBlock *stopped =
+            BasicBlock::Create(context_, "tail_materialize", function_);
+        builder_.CreateCondBr(continues, forward, stopped);
+        builder_.SetInsertPoint(forward);
+        returnNative(returnedPC);
+        builder_.SetInsertPoint(stopped);
+        materialize(returnedPC);
+        returnFromBody();
+      } else {
+        materialize(returnedPC);
+        returnFromBody();
+      }
+      builder_.restoreIP(saved);
+      return callBlock;
+    }
+    const u32 continuation = term.guest_pc + 4u;
+    const bool local = continuation >= source_.guest_start &&
+                       continuation < source_.guest_end &&
+                       ((continuation - source_.guest_start) & 3u) == 0;
+    const u32 continuationBlock =
+        local ? (continuation - source_.guest_start) / 4u : 0u;
+    BasicBlock *resume = BasicBlock::Create(context_, "call_resume", function_);
+    BasicBlock *mismatch =
+        BasicBlock::Create(context_, "call_mismatch", function_);
+    Value *matches = builder_.CreateAnd(
+        continues,
+        builder_.CreateICmpEQ(returnedPC, builder_.getInt32(continuation)));
+    if (!local || continuationBlock >= blocks_.size())
+      matches = builder_.getFalse();
+    builder_.CreateCondBr(matches, resume, mismatch);
+    builder_.SetInsertPoint(mismatch);
+    materialize(returnedPC);
+    returnFromBody();
+    builder_.SetInsertPoint(resume);
+    builder_.CreateBr(blocks_[continuationBlock]);
+    builder_.restoreIP(saved);
+    return callBlock;
+  }
+  if (!term.linked) {
+    nativeCall->setTailCallKind(CallInst::TCK_MustTail);
+    builder_.CreateRetVoid();
+    builder_.restoreIP(saved);
+    return callBlock;
+  }
+  u32 continuation = term.guest_pc + 4u;
+  u32 continuationBlock = 0;
+  bool local = continuation >= source_.guest_start &&
+               continuation < source_.guest_end &&
+               ((continuation - source_.guest_start) & 3u) == 0;
+  if (local)
+    continuationBlock = (continuation - source_.guest_start) / 4u;
+  BasicBlock *resume = BasicBlock::Create(context_, "call_resume", function_);
+  BasicBlock *mismatch =
+      BasicBlock::Create(context_, "call_mismatch", function_);
+  Value *returnedPC =
+      loadOffset(Type::getInt32Ty(context_), offsetof(CPUState, pc));
+  builder_.CreateCondBr(
+      builder_.CreateICmpEQ(returnedPC, builder_.getInt32(continuation)),
+      resume, mismatch);
+  builder_.SetInsertPoint(mismatch);
+  builder_.CreateRetVoid();
+  builder_.SetInsertPoint(resume);
+  if (!local || continuationBlock >= blocks_.size()) {
+    builder_.CreateRetVoid();
+  } else {
+    reloadCallCounters();
+    reloadUsedState();
+    builder_.CreateBr(blocks_[continuationBlock]);
+  }
+  builder_.restoreIP(saved);
+  return callBlock;
+}
+
+BasicBlock *FunctionEmitter::exitDestination(u32 pc) {
+  BasicBlock *exit = BasicBlock::Create(context_, "side_exit", function_);
+  IRBuilderBase::InsertPoint saved = builder_.saveIP();
+  builder_.SetInsertPoint(exit);
+  sideExit(pc);
+  builder_.restoreIP(saved);
+  return exit;
+}
+
+BasicBlock *
+FunctionEmitter::fallbackDestination(const DolIRTerminator &terminator) {
+  return fallbackEdge(terminator.guest_pc);
+}
+
+BasicBlock *FunctionEmitter::fallbackEdge(u32 pc) {
+  BasicBlock *edge = BasicBlock::Create(context_, "fallback_edge", function_);
+  IRBuilderBase::InsertPoint saved = builder_.saveIP();
+  builder_.SetInsertPoint(edge);
+  fallback_pc_->addIncoming(builder_.getInt32(pc), edge);
+  builder_.CreateBr(fallback_block_);
+  builder_.restoreIP(saved);
+  return edge;
+}
+
+} // namespace dolllvm

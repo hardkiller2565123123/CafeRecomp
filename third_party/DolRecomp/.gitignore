@@ -1,0 +1,58 @@
+# Build
+build/
+build-*/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+Testing/
+out/
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Compiled
+*.o
+*.obj
+*.exe
+*.dll
+*.so
+*.dylib
+*.a
+*.lib
+
+# Dependencies (if we vendor anything)
+extern/*/
+
+# Test artifacts
+tests/data/*.dol
+tests/data/*.elf
+tests/data/*.rel
+tests/data/*.rpx
+tests/data/*.rpl
+tests/data/*.iso
+tests/data/*.gcm
+
+# discs and test output
+*.elf
+*.dol
+*.rpx
+*.rpl
+*.iso
+*.gcm
+discs/
+generated/
+*_generated/
+
+# Local database for title ids
+database/

@@ -1,0 +1,6 @@
+[submodule "third_party/SDL"]
+	path = third_party/SDL
+	url = https://github.com/yawut/SDL
+[submodule "third_party/SPIRV-Cross"]
+	path = third_party/SPIRV-Cross
+	url = https://github.com/KhronosGroup/SPIRV-Cross.git

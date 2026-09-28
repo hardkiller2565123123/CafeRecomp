@@ -1,0 +1,86 @@
+{
+  "name": "cemu",
+  "version-string": "1.0",
+  "builtin-baseline": "f0fb3ddba5135b80982668de39dbaa139c00d281",
+  "dependencies": [
+    "pugixml",
+    "zlib",
+    "zstd",
+    {
+      "name": "libzip",
+      "default-features": false
+    },
+    "rapidjson",
+    {
+      "name": "sdl3",
+      "default-features": false
+    },
+    "boost-tokenizer",
+    "boost-container",
+    "boost-program-options",
+    "boost-nowide",
+    "boost-algorithm",
+    "boost-functional",
+    "boost-optional",
+    "boost-signals2",
+    "boost-asio",
+    "boost-ptr-container",
+    "boost-property-tree",
+    "boost-static-string",
+    "boost-random",
+    {
+      "name": "fmt",
+      "version>=": "12.1.0"
+    },
+    "libpng",
+    "glm",
+    {
+      "name": "glslang",
+      "default-features": false
+    },
+    "zstd",
+    {
+      "name": "wxwidgets",
+      "default-features": false,
+      "features": [
+        "debug-support"
+      ]
+    },
+    "openssl",
+    {
+      "name": "curl",
+      "default-features": false,
+      "features": [
+        "openssl"
+      ]
+    },
+    {
+      "name": "dbus",
+      "default-features": false,
+      "platform": "linux"
+    },
+    {
+      "name": "tiff",
+      "default-features": false,
+      "features": [
+        "jpeg",
+        "zip"
+      ]
+    },
+    "libusb"
+  ],
+  "overrides": [
+    {
+      "name": "glslang",
+      "version": "15.1.0"
+    },
+    {
+      "name": "sdl3",
+      "version": "3.4.10"
+    },
+    {
+      "name": "wxwidgets",
+      "version": "3.3.3"
+    }
+  ]
+}

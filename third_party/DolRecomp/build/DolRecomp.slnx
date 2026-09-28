@@ -1,0 +1,190 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Solution>
+	<Configurations>
+		<BuildType Name="Debug"/>
+		<BuildType Name="Release"/>
+		<BuildType Name="MinSizeRel"/>
+		<BuildType Name="RelWithDebInfo"/>
+		<Platform Name="x64"/>
+	</Configurations>
+	<Project Path="ALL_BUILD.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="00b21846-1ac0-3374-b21e-f4bc92a0e251" DefaultStartup="true">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="dolir_stats.vcxproj"/>
+		<BuildDependency Project="dolrecomp.vcxproj"/>
+		<BuildDependency Project="dr_analysis.vcxproj"/>
+		<BuildDependency Project="dr_app.vcxproj"/>
+		<BuildDependency Project="dr_backend.vcxproj"/>
+		<BuildDependency Project="dr_cpu.vcxproj"/>
+		<BuildDependency Project="dr_frontend.vcxproj"/>
+		<BuildDependency Project="dr_ir.vcxproj"/>
+		<BuildDependency Project="dr_platform.vcxproj"/>
+		<BuildDependency Project="test_c_cfg.vcxproj"/>
+		<BuildDependency Project="test_c_execute.vcxproj"/>
+		<BuildDependency Project="test_cli.vcxproj"/>
+		<BuildDependency Project="test_codegen_emit.vcxproj"/>
+		<BuildDependency Project="test_cross_check.vcxproj"/>
+		<BuildDependency Project="test_disc_extract.vcxproj"/>
+		<BuildDependency Project="test_dispatch.vcxproj"/>
+		<BuildDependency Project="test_dol.vcxproj"/>
+		<BuildDependency Project="test_dolir.vcxproj"/>
+		<BuildDependency Project="test_float_semantics.vcxproj"/>
+		<BuildDependency Project="test_fpscr.vcxproj"/>
+		<BuildDependency Project="test_jumptables.vcxproj"/>
+		<BuildDependency Project="test_module_abi.vcxproj"/>
+		<BuildDependency Project="test_opcodes.vcxproj"/>
+		<BuildDependency Project="test_pc_reference.vcxproj"/>
+		<BuildDependency Project="test_rel.vcxproj"/>
+		<BuildDependency Project="test_rpx.vcxproj"/>
+		<BuildDependency Project="test_symbols.vcxproj"/>
+		<Build Solution="Debug|*" Project="false"/>
+		<Build Solution="Release|*" Project="false"/>
+		<Build Solution="MinSizeRel|*" Project="false"/>
+		<Build Solution="RelWithDebInfo|*" Project="false"/>
+	</Project>
+	<Project Path="RUN_TESTS.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="976995ec-caab-3f6a-94df-1ef6a083a001">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<Build Solution="Debug|*" Project="false"/>
+		<Build Solution="Release|*" Project="false"/>
+		<Build Solution="MinSizeRel|*" Project="false"/>
+		<Build Solution="RelWithDebInfo|*" Project="false"/>
+	</Project>
+	<Project Path="ZERO_CHECK.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="aa8bc027-7d7b-3f7b-a14b-dcb22a7b72ad"/>
+	<Project Path="dolir_stats.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="68c223bc-ec88-3168-ab0c-c402c2f4a488">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="dr_analysis.vcxproj"/>
+		<BuildDependency Project="dr_frontend.vcxproj"/>
+		<BuildDependency Project="dr_ir.vcxproj"/>
+	</Project>
+	<Project Path="dolrecomp.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="06004e21-d400-3fa8-9027-87ee63679309">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="dr_analysis.vcxproj"/>
+		<BuildDependency Project="dr_app.vcxproj"/>
+		<BuildDependency Project="dr_backend.vcxproj"/>
+		<BuildDependency Project="dr_frontend.vcxproj"/>
+		<BuildDependency Project="dr_ir.vcxproj"/>
+		<BuildDependency Project="dr_platform.vcxproj"/>
+	</Project>
+	<Project Path="dr_analysis.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="dbf6ceb9-fda5-3157-8b1b-994cdae6cb3c">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="dr_frontend.vcxproj"/>
+	</Project>
+	<Project Path="dr_app.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="f037e96e-269a-3346-a986-c510501f7ca4">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="dr_analysis.vcxproj"/>
+		<BuildDependency Project="dr_backend.vcxproj"/>
+		<BuildDependency Project="dr_frontend.vcxproj"/>
+		<BuildDependency Project="dr_ir.vcxproj"/>
+		<BuildDependency Project="dr_platform.vcxproj"/>
+	</Project>
+	<Project Path="dr_backend.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="f6821f6d-059a-3bf3-9a3e-4591dbe0f7e2">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="dr_analysis.vcxproj"/>
+		<BuildDependency Project="dr_frontend.vcxproj"/>
+	</Project>
+	<Project Path="dr_cpu.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="2653d3af-c027-3a75-8630-6b2b145500b7">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+	</Project>
+	<Project Path="dr_frontend.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="37e838eb-d158-37ae-80f0-662486f81ba2">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+	</Project>
+	<Project Path="dr_ir.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="4e639c76-e349-3c3c-8bd2-9162898449b7">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="dr_frontend.vcxproj"/>
+	</Project>
+	<Project Path="dr_platform.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="83a8b6a2-1119-3c87-8a1d-427a32d82b9a">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+	</Project>
+	<Project Path="test_c_cfg.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="337a7d7a-a7ec-3b14-8924-2647788a532b">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="dr_analysis.vcxproj"/>
+		<BuildDependency Project="dr_backend.vcxproj"/>
+		<BuildDependency Project="dr_frontend.vcxproj"/>
+	</Project>
+	<Project Path="test_c_execute.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="4ce041a5-35cc-3e67-8aea-a4f9cb6976aa">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="dr_cpu.vcxproj"/>
+		<BuildDependency Project="test_codegen_emit.vcxproj"/>
+	</Project>
+	<Project Path="test_cli.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="422e463f-a8be-356d-a561-69a5c942ed40">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="dr_analysis.vcxproj"/>
+		<BuildDependency Project="dr_app.vcxproj"/>
+		<BuildDependency Project="dr_backend.vcxproj"/>
+		<BuildDependency Project="dr_frontend.vcxproj"/>
+		<BuildDependency Project="dr_ir.vcxproj"/>
+		<BuildDependency Project="dr_platform.vcxproj"/>
+	</Project>
+	<Project Path="test_codegen_emit.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="3a0ee44b-45fe-3b2e-8ed2-4256868d4f78">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="dr_analysis.vcxproj"/>
+		<BuildDependency Project="dr_backend.vcxproj"/>
+		<BuildDependency Project="dr_frontend.vcxproj"/>
+	</Project>
+	<Project Path="test_cross_check.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="e71aaaed-ab3f-3c2d-819a-2c494063d6ac">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="dr_frontend.vcxproj"/>
+	</Project>
+	<Project Path="test_disc_extract.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="d286c7a1-cea0-39d2-b9bd-b77f44caf298">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+	</Project>
+	<Project Path="test_dispatch.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="2fbd4bed-a8eb-30d8-963e-11d829fa3224">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="dr_analysis.vcxproj"/>
+		<BuildDependency Project="dr_backend.vcxproj"/>
+		<BuildDependency Project="dr_frontend.vcxproj"/>
+	</Project>
+	<Project Path="test_dol.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="fa4729fb-9d20-3b5b-9a08-9f41fa489d27">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="dr_frontend.vcxproj"/>
+	</Project>
+	<Project Path="test_dolir.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="bf5fe955-d40a-3437-b3e7-d6713bc127d3">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="dr_frontend.vcxproj"/>
+		<BuildDependency Project="dr_ir.vcxproj"/>
+	</Project>
+	<Project Path="test_float_semantics.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="450682bd-1bc7-39c4-8c0d-7d1d4469498e">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="dr_cpu.vcxproj"/>
+	</Project>
+	<Project Path="test_fpscr.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="7fde4349-0a47-33c5-a22b-88ca3e6c5f4a">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="dr_cpu.vcxproj"/>
+	</Project>
+	<Project Path="test_jumptables.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="44237e92-3870-332f-9d2b-d202e39cf30e">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="dr_analysis.vcxproj"/>
+		<BuildDependency Project="dr_backend.vcxproj"/>
+		<BuildDependency Project="dr_cpu.vcxproj"/>
+		<BuildDependency Project="dr_frontend.vcxproj"/>
+	</Project>
+	<Project Path="test_module_abi.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="a8ea54cb-a40b-3d56-9e00-6d4d7efb162d">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="dr_analysis.vcxproj"/>
+		<BuildDependency Project="dr_backend.vcxproj"/>
+		<BuildDependency Project="dr_cpu.vcxproj"/>
+		<BuildDependency Project="dr_frontend.vcxproj"/>
+	</Project>
+	<Project Path="test_opcodes.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="1fbaac94-3f27-35dc-87b1-1214cb097b7d">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="dr_frontend.vcxproj"/>
+	</Project>
+	<Project Path="test_pc_reference.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="5d124b40-e4c9-338b-93c4-7d8110ae02ef">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="dr_cpu.vcxproj"/>
+		<BuildDependency Project="dr_frontend.vcxproj"/>
+	</Project>
+	<Project Path="test_rel.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="fcb399a6-448e-3128-82b1-4fc6db406623">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="dr_frontend.vcxproj"/>
+	</Project>
+	<Project Path="test_rpx.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="1e2392ad-531e-386f-81fa-d3520ac78a23">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="dr_frontend.vcxproj"/>
+	</Project>
+	<Project Path="test_symbols.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="a6315eb1-4322-3279-bde8-3fbaa54db018">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="dr_analysis.vcxproj"/>
+		<BuildDependency Project="dr_backend.vcxproj"/>
+		<BuildDependency Project="dr_frontend.vcxproj"/>
+	</Project>
+</Solution>

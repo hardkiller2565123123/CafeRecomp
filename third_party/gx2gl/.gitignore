@@ -1,0 +1,110 @@
+*.rpx
+*.o
+# Build folder
+build/
+build_wsl/
+*.rpx
+
+# gx2gl: machine-local & generated artifacts
+# Build folders
+build/
+build_pc/
+build_wsl/
+build*/
+
+# CMake and build system files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+Makefile2
+Makefile.cmake
+rules.ninja
+progress.marks
+InstallScripts.json
+TargetDirectories.txt
+
+# Generated / auto-generated sources
+generated/
+desktop_gl_bindings.cpp
+desktop_gl_bindings.h
+src/core/gx2gl_proc_table.inc
+
+# Object, library and binary files
+*.o
+*.obj
+*.a
+*.lib
+*.dll
+*.so
+*.dylib
+*.exe
+*.out
+
+# Game/package artifacts
+*.ppm
+*.rpl
+*.rpx
+*.wuhb
+
+# Debug / linker files
+*.pdb
+*.ilk
+
+# Logs, temps, backups
+*.log
+*.tmp
+*.temp
+*.bak
+*~
+*.swp
+*.swo
+
+# Editors / IDEs
+.vscode/
+.vs/
+.idea/
+*.suo
+*.user
+*.userosscache
+*.sln
+*.sdf
+*.iml
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+env/
+venv/
+.venv/
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Secrets / credentials
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+id_rsa*
+id_ecdsa*
+.env
+.env.local
+
+# Test / coverage
+coverage/
+coverage.xml
+dist/
+
+# Misc
+*.log.*
+*.bak
+
+# Local run scripts
+# Ignore local PC/WiiU run/compare scripts
+tools/run_pc_wiiu_compare.ps1
+tools/run_pc_wiiu*.ps1
