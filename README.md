@@ -6,6 +6,10 @@ The project is currently focused on **The Legend of Zelda: Breath of the Wild**,
 
 The same framework can be adapted for other Wii U titles, with game-specific support built on top of the shared recompilation, runtime, and rendering systems.
 
+## Video
+
+[Watch the CafeRecomp early prototype / proof of concept](https://www.youtube.com/watch?v=v7CwIDTCNas)
+
 ## Breath of the Wild
 
 **The Legend of Zelda: Breath of the Wild** is currently the main development target for CafeRecomp.
@@ -48,8 +52,8 @@ Special thanks to the projects and developers whose work helped make CafeRecomp 
 - [DolRecomp](https://github.com/ExpansionPak/DolRecomp) — base recompilation framework
 - [Cemu](https://github.com/cemu-project/Cemu) — Wii U and rendering reference
 - [gx2gl](https://github.com/ExpansionPak/gx2gl) — GX2 graphics reference
-- [Aurora](https://github.com/encounter/aurora) — GX2 Rendering
-- [ModernGekko-Template](https://github.com/ExpansionPak/ModernGekko-Template) - just Exist
+- [Aurora](https://github.com/encounter/aurora) — GX2 rendering reference
+- [ModernGekko-Template](https://github.com/ExpansionPak/ModernGekko-Template) — project structure reference
 
 Thank you to everyone who contributed to these projects and shared their work with the community.
 
