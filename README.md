@@ -1,43 +1,107 @@
-# Wii U Recomp
+# CafeRecomp
 
-A work-in-progress native recompilation project focused on bringing Wii U software to modern PCs through static recompilation and a custom runtime.
+CafeRecomp is an open-source Wii U recompilation project focused on bringing Wii U games to modern PCs through static recompilation and a custom runtime.
 
-## Renderer
+The project is currently focused on **The Legend of Zelda: Breath of the Wild**, but CafeRecomp is being built as a reusable Wii U recompilation framework rather than a game-specific project.
 
-Wii U Recomp includes a custom renderer intended to reproduce the graphics behavior expected by recompiled Wii U software.
+The same framework can be adapted for other Wii U titles, with game-specific support built on top of the shared recompilation, runtime, and rendering systems.
 
-The renderer is being built alongside the runtime so graphics, shaders, render targets, textures, post-processing, depth behavior, and presentation can be handled directly by the recompilation environment.
+## Breath of the Wild
 
-## Current Status
+**The Legend of Zelda: Breath of the Wild** is currently the main development target for CafeRecomp.
 
-Wii U Recomp is still in development and is **not ready for general use**.
+Current work is focused on getting the game through the boot process, improving runtime compatibility, and continuing development of the graphics and rendering systems.
+
+Breath of the Wild is still in development and is not currently considered fully playable.
+
+## Current Progress
+
+Current work includes:
+
+- Wii U PowerPC static recompilation
+- RPX and RPL support
+- Native PC execution
+- Custom Wii U runtime
+- Custom renderer
+- GX2 graphics support
+- Shader support
+- Texture and surface support
+- Render targets and depth handling
+- Filesystem support
+- Memory management
+- Input support
+- Runtime debugging and logging
+- Breath of the Wild boot and compatibility work
+
+CafeRecomp is still in active development, and many parts of the Wii U environment are still being implemented.
 
 ## Goals
 
-* Native execution of recompiled Wii U code
-* Accurate Wii U runtime behavior
-* A reusable recompilation framework
-* A custom graphics pipeline for Wii U workloads
-* Clean separation between generated code and runtime components
-* Debugging and testing tools for development
-* An open-source release once the project is ready
+- Run recompiled Wii U software natively on modern PCs
+- Provide a reusable framework for different Wii U games
+- Reproduce Wii U runtime behavior
+- Support Wii U GX2 graphics
+- Improve Breath of the Wild compatibility
+- Support additional Wii U titles
+- Keep the framework clean and maintainable
+- Keep the project open source
 
-## Source Code
+## Building
 
-**Coming soon.**
+CafeRecomp is currently intended for development and testing.
 
-The source code, runtime, renderer, build files, and documentation are planned for release together once the project reaches a suitable public state.
+Build instructions and project requirements are included with the source code.
 
-Please do not treat the current repository as a finished release until the source has been published.
+## Credits
+
+CafeRecomp builds on research and work shared by several open-source emulation and recompilation projects.
+
+### [DolRecomp](https://github.com/ExpansionPak/DolRecomp)
+
+A huge thank you to the DolRecomp developers and contributors.
+
+**CafeRecomp uses DolRecomp as the base for its static recompilation framework.** Their work provided the foundation that made CafeRecomp possible without having to build the entire recompilation system from scratch.
+
+### [Cemu](https://github.com/cemu-project/Cemu)
+
+A huge thank you to the Cemu developers and contributors.
+
+Cemu has been an invaluable reference for **Wii U graphics, GX2 behavior, rendering, and system behavior** while developing CafeRecomp's renderer and runtime.
+
+### [gx2gl](https://github.com/ExpansionPak/gx2gl)
+
+Thanks to the gx2gl developers and contributors for their work on Wii U GX2 graphics translation.
+
+Their work has been a useful reference while developing CafeRecomp's graphics support.
+
+### [Aurora](https://github.com/encounter/aurora)
+
+Thanks to the Aurora developers and contributors for making their work and research available to the community.
+
+### [ModernGekko-Template](https://github.com/ExpansionPak/ModernGekko-Template)
+
+Thanks to the developers and contributors behind ModernGekko-Template for their work on recompilation project structure and tooling.
+
+Special thanks to everyone in the emulation, reverse-engineering, preservation, and static recompilation communities who shares their research and source code.
+
+## Status
+
+CafeRecomp is still in active development.
+
+Compatibility is limited, and bugs, crashes, missing graphics, and incomplete functionality should be expected.
+
+Breath of the Wild is the current main target, but the CafeRecomp framework is designed to be reused for other Wii U projects and games.
 
 ## Disclaimer
 
-This project is an independent preservation and research project and is not affiliated with, endorsed by, or sponsored by Nintendo.
+CafeRecomp is an independent preservation and research project and is not affiliated with, endorsed by, or sponsored by Nintendo.
 
-Wii U, Nintendo, and related names and trademarks belong to their respective owners.
+Wii U, Nintendo, The Legend of Zelda, Breath of the Wild, and related names and trademarks belong to their respective owners.
 
-This project does not provide copyrighted game files, encryption keys, firmware, or other proprietary Nintendo content. Users are responsible for supplying any legally obtained files required for their own use.
+CafeRecomp does not provide copyrighted game files, firmware, encryption keys, or other proprietary Nintendo content.
+
+Users are responsible for providing legally obtained files required for their own use.
 
 ## License
 
-License information will be added when the source code is released.
+See the repository license for details.
