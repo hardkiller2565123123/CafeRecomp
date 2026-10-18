@@ -53,16 +53,19 @@ typedef struct {
     uint64_t serial;
     bool sampler_valid;
     uint32_t sampler_word0;
+    bool rgba_float;
+    uint32_t array_layers; /* zero: 2D; otherwise a 2D-array view */
+    uint32_t volume_depth; /* zero: not a 3D texture */
 } WiiUWindowEffectTexture;
 typedef struct {
     const WiiULattePixelProgram* program;
-    WiiUWindowEffectTexture textures[16];
-    uint32_t source_surfaces[16];
+    WiiUWindowEffectTexture textures[WIIU_PIXEL_TEXTURES];
+    uint32_t source_surfaces[WIIU_PIXEL_TEXTURES];
     uint32_t targets[8];
     WiiUWindowGpuBlendControl blends[8];
-    /* First 16 vectors are texture component maps; remaining vectors are
+    /* First WIIU_PIXEL_TEXTURES vectors are texture component maps; remaining vectors are
        the translator's compact, draw-current uniform references. */
-    uint32_t constants[16+WIIU_PIXEL_CONSTANTS][4];
+    uint32_t constants[WIIU_PIXEL_TEXTURES+1+WIIU_PIXEL_CONSTANTS+512][4]; /* maps, packed constants, alpha, register bank, validity */
     const uint8_t* uniform_blocks[16];
     uint32_t uniform_block_sizes[16];
 } WiiUWindowSceneMaterial;

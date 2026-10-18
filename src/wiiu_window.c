@@ -81,9 +81,14 @@ static ID3D11Buffer* g_d3d_post_vertices;
 static ID3D11Buffer* g_d3d_post_constants;
 static ID3D11Buffer* g_d3d_scene_constants;
 static struct {ID3D11Buffer* buffer;ID3D11ShaderResourceView* view;uint32_t size;} g_scene_blocks[16];
-static struct { char* code; ID3D11PixelShader* shader; uint32_t key; uint64_t used; } g_scene_shaders[128];
+/* A BOTW scene exceeds 128 shader variants before its first completed frame.
+   Retain a bounded scene-sized working set instead of recompiling it each frame. */
+#define NATIVE_SCENE_SHADER_LIMIT 1024u
+static struct { char* code; ID3D11PixelShader* shader; uint32_t key; uint64_t used; } g_scene_shaders[NATIVE_SCENE_SHADER_LIMIT];
 static uint64_t g_scene_shader_serial;
 static struct { D3D11_BLEND_DESC desc; ID3D11BlendState* state; } g_scene_blends[64];
+static struct {ID3D11Texture2D* texture;ID3D11ShaderResourceView* view;
+    uint32_t width,height;DXGI_FORMAT format;} g_scene_feedback[8];
 static ID3D11InputLayout* g_d3d_quad_input_layout;
 static ID3D11Buffer* g_d3d_quad_vertex_buffer;
 static ID3D11BlendState* g_d3d_quad_blend_state;
@@ -119,6 +124,10 @@ typedef struct {
 typedef struct {
     bool valid;
     const uint8_t* source;
+    bool rgba_float;
+    uint32_t array_layers;
+    uint32_t volume_depth;
+    ID3D11Texture3D* volume;
     uint64_t serial;
     uint32_t width;
     uint32_t height;
@@ -602,6 +611,7 @@ static void native_gpu_release_texture(NativeGpuTexture* texture) {
         return;
     NATIVE_RELEASE(texture->view);
     NATIVE_RELEASE(texture->texture);
+    NATIVE_RELEASE(texture->volume);
     memset(texture, 0, sizeof(*texture));
 }
 
@@ -738,16 +748,16 @@ static uint16_t native_unorm8_to_half(uint8_t value) {
     return (uint16_t)((((bits>>23)-112)<<10)+(mantissa>>13));
 }
 
-static NativeGpuTexture* native_gpu_ensure_texture(
-    const uint8_t* source, uint32_t width, uint32_t height, uint64_t serial) {
-    if (!g_d3d_ready || !source || width == 0u || height == 0u)
+static NativeGpuTexture* native_gpu_ensure_texture_layers(
+    const uint8_t* source, uint32_t width, uint32_t height, uint64_t serial,bool rgba_float,uint32_t array_layers,uint32_t volume_depth) {
+    if (!g_d3d_ready || !source || width == 0u || height == 0u || array_layers>2048 || volume_depth>2048 || (volume_depth && (array_layers || !rgba_float || width>2048 || height>2048)))
         return NULL;
 
     for (uint32_t i = 0u; i < NATIVE_GPU_TEXTURE_LIMIT; i++) {
         NativeGpuTexture* texture = &g_native_gpu_textures[i];
         if (texture->valid && texture->source == source &&
             texture->serial == serial && texture->width == width &&
-            texture->height == height) {
+            texture->height == height && texture->rgba_float==rgba_float && texture->array_layers==array_layers && texture->volume_depth==volume_depth) {
             texture->use_serial = ++g_native_gpu_use_serial;
             return texture;
         }
@@ -767,31 +777,52 @@ static NativeGpuTexture* native_gpu_ensure_texture(
         return NULL;
 
     native_gpu_release_texture(replacement);
+    if(volume_depth) {
+        D3D11_TEXTURE3D_DESC vd={0};
+        vd.Width=width;vd.Height=height;vd.Depth=volume_depth;vd.MipLevels=1;
+        vd.Format=DXGI_FORMAT_R32G32B32A32_FLOAT;vd.Usage=D3D11_USAGE_DEFAULT;
+        vd.BindFlags=D3D11_BIND_SHADER_RESOURCE;
+        D3D11_SUBRESOURCE_DATA data={0};data.pSysMem=source;
+        data.SysMemPitch=width*16;data.SysMemSlicePitch=width*height*16;
+        if(FAILED(ID3D11Device_CreateTexture3D(g_d3d_device,&vd,&data,&replacement->volume)))goto failed;
+        if(FAILED(ID3D11Device_CreateShaderResourceView(g_d3d_device,(ID3D11Resource*)replacement->volume,NULL,&replacement->view)))goto failed;
+        goto uploaded;
+    }
     D3D11_TEXTURE2D_DESC desc;
     memset(&desc, 0, sizeof(desc));
     desc.Width = width;
     desc.Height = height;
     desc.MipLevels = 1u;
-    desc.ArraySize = 1u;
-    desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    desc.ArraySize = array_layers?array_layers:1u;
+    desc.Format = rgba_float?DXGI_FORMAT_R32G32B32A32_FLOAT:DXGI_FORMAT_B8G8R8A8_UNORM;
     desc.SampleDesc.Count = 1u;
     desc.Usage = D3D11_USAGE_DEFAULT;
     desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-    D3D11_SUBRESOURCE_DATA data;
-    memset(&data, 0, sizeof(data));
-    data.pSysMem = source;
-    data.SysMemPitch = width * 4u;
-    HRESULT result = ID3D11Device_CreateTexture2D(g_d3d_device, &desc, &data,
+    D3D11_SUBRESOURCE_DATA* data=calloc(desc.ArraySize,sizeof(*data));
+    if(!data)goto failed;
+    for(uint32_t layer=0;layer<desc.ArraySize;++layer) {
+        data[layer].pSysMem=source+(size_t)layer*width*height*(rgba_float?16u:4u);
+        data[layer].SysMemPitch=width*(rgba_float?16u:4u);
+    }
+    HRESULT result = ID3D11Device_CreateTexture2D(g_d3d_device, &desc, data,
                                                     &replacement->texture);
+    free(data);
     if (FAILED(result))
         goto failed;
+    D3D11_SHADER_RESOURCE_VIEW_DESC srv={0};srv.Format=desc.Format;
+    srv.ViewDimension=D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
+    srv.Texture2DArray.MipLevels=1;srv.Texture2DArray.ArraySize=desc.ArraySize;
     result = ID3D11Device_CreateShaderResourceView(
-        g_d3d_device, (ID3D11Resource*)replacement->texture, NULL,
+        g_d3d_device, (ID3D11Resource*)replacement->texture, array_layers?&srv:NULL,
         &replacement->view);
     if (FAILED(result))
         goto failed;
+uploaded:
     replacement->valid = true;
     replacement->source = source;
+    replacement->rgba_float=rgba_float;
+    replacement->array_layers=array_layers;
+    replacement->volume_depth=volume_depth;
     replacement->serial = serial;
     replacement->width = width;
     replacement->height = height;
@@ -801,6 +832,16 @@ static NativeGpuTexture* native_gpu_ensure_texture(
 failed:
     native_gpu_release_texture(replacement);
     return NULL;
+}
+
+static NativeGpuTexture* native_gpu_ensure_texture_format(
+    const uint8_t* source,uint32_t width,uint32_t height,uint64_t serial,bool rgba_float) {
+    return native_gpu_ensure_texture_layers(source,width,height,serial,rgba_float,0,0);
+}
+
+static NativeGpuTexture* native_gpu_ensure_texture(
+    const uint8_t* source,uint32_t width,uint32_t height,uint64_t serial) {
+    return native_gpu_ensure_texture_format(source,width,height,serial,false);
 }
 
 static bool native_gpu_blend_controls_match(
@@ -956,7 +997,10 @@ static void native_presenter_shutdown(void) {
         g_scene_blocks[i].size=0;
     }
     for(unsigned i=0;i<64;++i)NATIVE_RELEASE(g_scene_blends[i].state);
-    for(unsigned i=0;i<128;++i) {
+    for(unsigned i=0;i<8;++i) {
+        NATIVE_RELEASE(g_scene_feedback[i].view);NATIVE_RELEASE(g_scene_feedback[i].texture);
+    }
+    for(unsigned i=0;i<NATIVE_SCENE_SHADER_LIMIT;++i) {
         NATIVE_RELEASE(g_scene_shaders[i].shader);
         free(g_scene_shaders[i].code);g_scene_shaders[i].code=NULL;
     }
@@ -1610,8 +1654,8 @@ static ID3D11SamplerState* native_effect_sampler(const WiiUWindowEffectTexture* 
         0,0,D3D11_TEXTURE_ADDRESS_BORDER,0};
     D3D11_SAMPLER_DESC d={0};
     d.AddressU=address[word&7];d.AddressV=address[(word>>3)&7];
-    d.AddressW=D3D11_TEXTURE_ADDRESS_CLAMP;
-    if(!d.AddressU || !d.AddressV)return NULL;
+    d.AddressW=address[(word>>6)&7];
+    if(!d.AddressU || !d.AddressV || !d.AddressW)return NULL;
     /* Anisotropic filtering requires a mip chain; retain its requested
        point/bilinear base filter until mipmapped decoding is supported. */
     d.Filter=(D3D11_FILTER)(((min&1)?0x10:0)|((mag&1)?4:0));
@@ -1630,15 +1674,15 @@ static ID3D11SamplerState* native_effect_sampler(const WiiUWindowEffectTexture* 
 
 static ID3D11PixelShader* native_scene_shader(const WiiULattePixelProgram* program) {
     const char* code=program->hlsl;
-    unsigned slot=128;
-    for(unsigned i=0;i<128;++i) {
+    unsigned slot=NATIVE_SCENE_SHADER_LIMIT;
+    for(unsigned i=0;i<NATIVE_SCENE_SHADER_LIMIT;++i) {
         if(g_scene_shaders[i].code && g_scene_shaders[i].key==program->key && !strcmp(g_scene_shaders[i].code,code)) {
             g_scene_shaders[i].used=++g_scene_shader_serial;return g_scene_shaders[i].shader;
         }
-        if(!g_scene_shaders[i].code && slot==128)slot=i;
+        if(!g_scene_shaders[i].code && slot==NATIVE_SCENE_SHADER_LIMIT)slot=i;
     }
-    if(slot==128) {
-        slot=0;for(unsigned i=1;i<128;++i)if(g_scene_shaders[i].used<g_scene_shaders[slot].used)slot=i;
+    if(slot==NATIVE_SCENE_SHADER_LIMIT) {
+        slot=0;for(unsigned i=1;i<NATIVE_SCENE_SHADER_LIMIT;++i)if(g_scene_shaders[i].used<g_scene_shaders[slot].used)slot=i;
         NATIVE_RELEASE(g_scene_shaders[slot].shader);free(g_scene_shaders[slot].code);g_scene_shaders[slot].code=NULL;
     }
     char* copy=malloc(strlen(code)+1);if(!copy)return NULL;
@@ -1653,6 +1697,29 @@ static ID3D11PixelShader* native_scene_shader(const WiiULattePixelProgram* progr
         errors?(int)ID3D10Blob_GetBufferSize(errors):0,errors?(const char*)ID3D10Blob_GetBufferPointer(errors):"");
     NATIVE_RELEASE(blob);NATIVE_RELEASE(errors);
     return g_scene_shaders[slot].shader;
+}
+
+static ID3D11ShaderResourceView* native_scene_feedback_view(NativeGpuSurface* source,unsigned slot) {
+    if(slot>=8 || !source || !source->texture)return NULL;
+    if(!g_scene_feedback[slot].texture || g_scene_feedback[slot].width!=source->width ||
+       g_scene_feedback[slot].height!=source->height || g_scene_feedback[slot].format!=source->format) {
+        NATIVE_RELEASE(g_scene_feedback[slot].view);NATIVE_RELEASE(g_scene_feedback[slot].texture);
+        D3D11_TEXTURE2D_DESC desc={0};ID3D11Texture2D_GetDesc(source->texture,&desc);
+        desc.BindFlags=D3D11_BIND_SHADER_RESOURCE;desc.CPUAccessFlags=0;
+        desc.Usage=D3D11_USAGE_DEFAULT;desc.MiscFlags=0;
+        if(FAILED(ID3D11Device_CreateTexture2D(g_d3d_device,&desc,NULL,&g_scene_feedback[slot].texture)))return NULL;
+        if(FAILED(ID3D11Device_CreateShaderResourceView(g_d3d_device,
+            (ID3D11Resource*)g_scene_feedback[slot].texture,NULL,&g_scene_feedback[slot].view))) {
+            NATIVE_RELEASE(g_scene_feedback[slot].texture);return NULL;
+        }
+        g_scene_feedback[slot].width=source->width;g_scene_feedback[slot].height=source->height;
+        g_scene_feedback[slot].format=source->format;
+    }
+    /* Snapshot the preceding pass: D3D11 cannot bind one image as SRV and RTV. */
+    ID3D11DeviceContext_OMSetRenderTargets(g_d3d_context,0,NULL,NULL);
+    ID3D11DeviceContext_CopyResource(g_d3d_context,(ID3D11Resource*)g_scene_feedback[slot].texture,
+        (ID3D11Resource*)source->texture);
+    return g_scene_feedback[slot].view;
 }
 
 static bool native_draw_postprocess(uint32_t target_key,uint32_t width,
@@ -1679,7 +1746,7 @@ static bool native_draw_postprocess(uint32_t target_key,uint32_t width,
         if(!texture) return false;
         view=texture->view;
     }
-    ID3D11ShaderResourceView* views[32]={view};
+    ID3D11ShaderResourceView* views[WIIU_PIXEL_TEXTURES+16]={view};
     unsigned extra=scene?0:mode>=7?2:mode==4?1:0;
     for(unsigned i=0;i<extra;++i) {
         if(!textures || !textures[i+1].pixels) return false;
@@ -1732,8 +1799,8 @@ static bool native_draw_postprocess(uint32_t target_key,uint32_t width,
         }
         if(slot==64)return false;
         draw_blend=g_scene_blends[slot].state;
-        for(unsigned i=0;i<16;++i) {
-            if(scene->program->block_mask&(1u<<i)) {
+        for(unsigned i=0;i<WIIU_PIXEL_TEXTURES;++i) {
+            if(i<16 && (scene->program->block_mask&(1u<<i))) {
                 uint32_t size=scene->uniform_block_sizes[i];
                 if(!scene->uniform_blocks[i] || !size || size%16 || size>1048576)return false;
                 if(g_scene_blocks[i].size!=size) {
@@ -1751,25 +1818,30 @@ static bool native_draw_postprocess(uint32_t target_key,uint32_t width,
                 }
                 ID3D11DeviceContext_UpdateSubresource(g_d3d_context,(ID3D11Resource*)g_scene_blocks[i].buffer,
                     0,NULL,scene->uniform_blocks[i],0,0);
-                views[16+i]=g_scene_blocks[i].view;
+                views[WIIU_PIXEL_TEXTURES+i]=g_scene_blocks[i].view;
             }
             if(scene->program->texture_mask&(1u<<i)) {
                 uint32_t key=scene->source_surfaces[i];
-                for(unsigned j=0;j<8;++j)if(scene_targets[j] && key &&
-                    scene_targets[j]==native_gpu_find_surface(key))return false;
                 if(key) {
+                    if(scene->program->array_texture_mask&(1u<<i))return false;
                     NativeGpuSurface* source=native_gpu_find_surface(key);
                     if(!source || !source->contents_valid)return false;
                     views[i]=source->view;
+                    for(unsigned j=0;j<8;++j)if(scene_targets[j]==source) {
+                        views[i]=native_scene_feedback_view(source,j);break;
+                    }
+                    if(!views[i])return false;
                 } else {
                     const WiiUWindowEffectTexture* input=&scene->textures[i];
                     if(!input->pixels)return false;
-                    NativeGpuTexture* texture=native_gpu_ensure_texture(input->pixels,input->width,input->height,input->serial);
+                    if(((scene->program->array_texture_mask&(1u<<i))!=0)!=(input->array_layers!=0))return false;
+                    if(((scene->program->volume_texture_mask&(1u<<i))!=0)!=(input->volume_depth!=0))return false;
+                    NativeGpuTexture* texture=native_gpu_ensure_texture_layers(input->pixels,input->width,input->height,input->serial,input->rgba_float,input->array_layers,input->volume_depth);
                     if(!texture)return false;
                     views[i]=texture->view;
                 }
             }
-            if(scene->program->sampler_mask&(1u<<i)) {
+            if(i<16 && (scene->program->sampler_mask&(1u<<i))) {
                 samplers[i]=native_effect_sampler(&scene->textures[i]);
                 if(!samplers[i])return false;
             }
@@ -1817,11 +1889,11 @@ static bool native_draw_postprocess(uint32_t target_key,uint32_t width,
     ID3D11DeviceContext_PSSetShader(g_d3d_context,pixel_shader,NULL,0);
     ID3D11DeviceContext_PSSetConstantBuffers(g_d3d_context,0,1,&g_d3d_post_constants);
     if(scene)ID3D11DeviceContext_PSSetConstantBuffers(g_d3d_context,1,1,&g_d3d_scene_constants);
-    ID3D11DeviceContext_PSSetShaderResources(g_d3d_context,0,scene?32:3,views);
+    ID3D11DeviceContext_PSSetShaderResources(g_d3d_context,0,scene?WIIU_PIXEL_TEXTURES+16:3,views);
     ID3D11DeviceContext_PSSetSamplers(g_d3d_context,0,scene?16:3,samplers);
     ID3D11DeviceContext_Draw(g_d3d_context,count,0);
     memset(views,0,sizeof(views));
-    ID3D11DeviceContext_PSSetShaderResources(g_d3d_context,0,scene?32:3,views);
+    ID3D11DeviceContext_PSSetShaderResources(g_d3d_context,0,scene?WIIU_PIXEL_TEXTURES+16:3,views);
     target->use_serial=++g_native_gpu_use_serial;
     if(scene)for(unsigned i=0;i<8;++i)if(scene_targets[i])scene_targets[i]->use_serial=++g_native_gpu_use_serial;
     return true;

@@ -22,6 +22,7 @@ typedef struct {
 
 /* Base-mip normalized 2D sampling for vertex data. Float textures retain
    signed/HDR values; they are never quantized through the UI's BGRA8 path. */
+bool wiiu_gx2_software_decode_float(CPUState* cpu,const WiiUGX2TextureView* texture,float* rgba);
 bool wiiu_gx2_software_sample_float(CPUState* cpu,const WiiUGX2TextureView* texture,
     u32 sampler_word,float u,float v,float result[4]);
 bool wiiu_gx2_software_sample_bgra(const u8* pixels,const WiiUGX2TextureView* texture,

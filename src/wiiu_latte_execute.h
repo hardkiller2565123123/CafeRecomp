@@ -21,6 +21,8 @@ typedef struct {
         float u,float v,float lod,float result[4]);
     void* texture_user;
     bool (*texture_info)(void* user,unsigned texture,uint32_t lod,uint32_t result[4]);
+    bool (*sample_texture_layer)(void* user,unsigned texture,unsigned sampler,
+        float u,float v,float layer,float lod,float result[4]);
 } WiiULatteVertexInputs;
 
 typedef struct {
@@ -32,4 +34,6 @@ typedef struct {
 
 bool wiiu_latte_execute_vertex(const uint8_t* program, size_t size,
     const WiiULatteVertexInputs* inputs, WiiULatteVertexOutputs* outputs);
+/* Diagnostic for the serialized renderer, reset on each execution. */
+unsigned wiiu_latte_vertex_failure_line(void);
 #endif

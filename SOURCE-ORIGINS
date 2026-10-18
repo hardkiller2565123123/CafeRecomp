@@ -1,0 +1,33 @@
+CafeRecomp consolidated source origins
+
+Consolidating code does not change its authorship or license. Retain the original
+notices when modifying or distributing these modules.
+
+src/recompiler
+  Locally modified DolRecomp, revision 1bec3554ecc4817cf78319ca3d8a0669477f29fa.
+  https://github.com/ExpansionPak/DolRecomp
+  License: LICENSE-DolRecomp-GPL-3.0. Existing local CPU/emitter changes retained.
+  The cafe_codegen tool is built by CafeRecomp's root CMake project. Its usage
+  banner now uses the actual executable name instead of hard-coding dolrecomp.exe.
+
+src/graphics/latte
+  Portable Cemu GPU sources and adaptations from the user-supplied
+  ZeldaWWHDRecomp checkout, revision 5c39d48912e90ba749beaa9136dd0e9b52a480ff.
+  License: licenses/ZeldaWWHDRecomp-MPL-2.0 and module LICENSE files.
+  CafeRecomp modifications: MSVC endian intrinsics and the C surface adapter.
+  Active integration: GX2 surface sizing, alignment, tile selection, mip chains.
+  Shader-decompiler sources are retained for further integration but are NOT
+  connected to D3D11 yet. The WWHD Vulkan/Metal renderer is NOT the active backend.
+
+src/libraries/fmt
+  fmt headers from that same checkout; license: licenses/fmt.
+
+src/compression/zlib
+  zlib 1.3.2 from the previously pinned build dependency, now built locally.
+  Original archive SHA256:
+  bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16
+  License: licenses/zlib. No network fetch required during configure/build.
+
+The old complete dependency checkouts (including unintegrated WWHD runtime and
+renderers) are retained in build/archive/third_party-before-consolidation-1010.
+They are excluded from the active build and source-release archive.

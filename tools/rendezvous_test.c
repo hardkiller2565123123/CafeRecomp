@@ -9,7 +9,19 @@
 static u32 worker_returns[3], worker_done[3], wait_calls, sleep_calls;
 static u32 audio_calls;
 static u32 mutex_calls, mutex_done, mutex_return;
+static u32 join_calls, join_done, join_return, join_result;
 static bool test_worker_call(CPUState* cpu, u32 address) {
+    if (address == 0x06004000u) {
+        join_return = cpu->lr;
+        cpu->gpr[3] = cpu->gpr[4]; cpu->gpr[4] = 0;
+        cpu->lr = 0x06004004u; cpu->pc = 0x0434DE20u;
+        return true;
+    }
+    if (address == 0x06004004u) {
+        ++join_done; join_result = cpu->gpr[3]; cpu->pc = join_return;
+        return true;
+    }
+    if (address == 0x0434DE20u) ++join_calls;
     if(address==0x06003000u) {
         mutex_return=cpu->lr;cpu->lr=0x06003004u;
         cpu->gpr[3]=cpu->gpr[4];cpu->pc=0x0434D900u;return true;
@@ -41,6 +53,7 @@ static bool test_worker_call(CPUState* cpu, u32 address) {
     if (address == 0x06001004u) {
         u32 id = cpu->gpr[31];
         ++worker_done[id];
+        cpu->gpr[3] = 0xC0DEu + id;
         cpu->pc = worker_returns[id];
         return true;
     }
@@ -56,7 +69,10 @@ int main(void) {
     CPUState cpu = {0};
     WiiUMemory memory;
     int result = 0;
-    rpx.symbol_count = 26;
+    rpx.symbol_count = 27;
+    strcpy(rpx.symbols[26].name, "OSJoinThread");
+    rpx.symbols[26].value = 0x0434DE20u;
+    rpx.symbols[26].section_index = RPX_SYMBOL_SECTION_ALIAS;
     const char* audio_names[] = {"AXInit", "AXRegisterAppFrameCallback", "AXQuit"};
     for (u32 i = 0; i < 3; ++i) {
         strcpy(rpx.symbols[23+i].name, audio_names[i]);
@@ -325,6 +341,24 @@ int main(void) {
     for (u32 i = 0; i < 10u; ++i) wiiu_imports_run_resumed_threads(&cpu, 8u);
     CHECK(wait_calls == 2u && sleep_calls == 1u);
     CHECK(worker_done[0] + worker_done[1] + worker_done[2] == 0u);
+    /* Join is a blocking operation: the caller must not free/recreate this
+       sleeping worker while the host still owns its live context. */
+    cpu.pc = rpx.symbols[26].value; cpu.lr = caller;
+    cpu.gpr[3] = object + 12288u; cpu.gpr[4] = object + 64u;
+    mem_write32(&cpu, object + 64u, 0xDEADBEEFu);
+    CHECK(wiiu_imports_host_call(&cpu, cpu.pc));
+    CHECK(cpu.pc == rpx.symbols[26].value && cpu.gpr[3] == object + 12288u);
+    CHECK(cpu.gpr[4] == object + 64u && mem_read32(&cpu, object + 64u) == 0xDEADBEEFu);
+    cpu.pc = rpx.symbols[21].value; cpu.lr = caller;
+    cpu.gpr[3] = object + 0xD000u; cpu.gpr[4] = 0x06004000u;
+    cpu.gpr[5] = 0; cpu.gpr[6] = object + 4096u;
+    cpu.gpr[7] = object + 0xF000u; cpu.gpr[8] = 4096u;
+    cpu.gpr[9] = 16; cpu.gpr[10] = 2;
+    CHECK(wiiu_imports_host_call(&cpu, cpu.pc) && cpu.gpr[3] == 1);
+    cpu.pc = rpx.symbols[22].value; cpu.gpr[3] = object + 0xD000u;
+    CHECK(wiiu_imports_host_call(&cpu, cpu.pc));
+    for (unsigned i = 0; i < 10; ++i) wiiu_imports_run_resumed_threads(&cpu, 8);
+    CHECK(join_calls == 1 && join_done == 0);
     for (u32 tokens = 1; tokens <= 2u; ++tokens) {
         cpu.pc = rpx.symbols[14].value; cpu.gpr[3] = object; cpu.lr = caller;
         CHECK(wiiu_imports_host_call(&cpu, cpu.pc));
@@ -332,12 +366,20 @@ int main(void) {
         CHECK(worker_done[0] + worker_done[1] == tokens);
         CHECK(mem_read32(&cpu, object + 12u) == 0u);
     }
+    CHECK(join_calls == 2 && join_done == 1 && join_result == 1);
     wiiu_imports_advance_timebase(0x100000004ull);
     wiiu_imports_run_resumed_threads(&cpu, 8u);
     CHECK(worker_done[2] == 0u && sleep_calls == 1u);
     wiiu_imports_advance_timebase(1u);
     wiiu_imports_run_resumed_threads(&cpu, 8u);
     CHECK(worker_done[2] == 1u && sleep_calls == 1u);
+    cpu.pc = rpx.symbols[26].value; cpu.lr = caller;
+    cpu.gpr[3] = object + 12288u; cpu.gpr[4] = object + 64u;
+    CHECK(wiiu_imports_host_call(&cpu, cpu.pc));
+    CHECK(cpu.pc == caller && cpu.gpr[3] == 1u);
+    CHECK(mem_read32(&cpu, object + 64u) == 0xC0E0u);
+    cpu.pc = rpx.symbols[26].value; cpu.gpr[3] = object + 12288u;
+    CHECK(wiiu_imports_host_call(&cpu, cpu.pc) && cpu.gpr[3] == 0u);
     /* An ordinary mutex waiter must sleep across scheduler turns, stay asleep
        through recursive unlocks, then acquire and release on the final unlock. */
     cpu.pc=rpx.symbols[2].value;cpu.lr=caller;cpu.gpr[3]=object;
@@ -412,7 +454,10 @@ int main(void) {
     CHECK(audio_calls == 17u); /* A 30 ms load stall fits inside the prebuffer. */
     cpu.timebase += 21u * 186469u;
     for (u32 i = 0; i < 100u; ++i) wiiu_imports_run_audio(&cpu, 1u);
-    CHECK(audio_calls == 18u); /* A longer stall rebases instead of flooding. */
+    CHECK(audio_calls == 38u); /* 63 ms fits the adaptive 192 ms reserve. */
+    cpu.timebase += 65u * 186469u;
+    for (u32 i = 0; i < 100u; ++i) wiiu_imports_run_audio(&cpu, 1u);
+    CHECK(audio_calls == 39u); /* Beyond the reserve, rebase instead of flooding. */
     cpu.pc = rpx.symbols[25].value; cpu.lr = caller;
     CHECK(wiiu_imports_host_call(&cpu, cpu.pc));
 cleanup:

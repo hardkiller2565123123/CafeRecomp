@@ -423,7 +423,154 @@ static int test_constant_triangle(CPUState* cpu, u32 color) {
             }
         }
     }
+    /* Stale MRT attachments remain bound, but disabled channel masks must
+       not make their undefined shader exports reject the live target. */
+    const u32 masked_cf[]={0x20,0xA0100000,0,0x94000688,0x8001,0x94200688};
+    const u32 dead_mov[]={0x80000002,0x00200C90};
+    cpu->gpr[3]=0;cpu->gpr[4]=4;cpu->gpr[5]=uniforms;
+    wiiu_gx2_handle_import(cpu,"GX2SetVertexUniformReg");
+    mem_write32(cpu,ps+8,0x04000000);
+    for(u32 i=0;i<32;++i)mem_write32(cpu,vs+0x44+i*4,i?255:0);
+    const u32 fetch=vs+3500,stream=vs+3540,fetch_program=vs+3600;
+    for(u32 i=0;i<32;i+=4)mem_write32(cpu,stream+i,0);
+    mem_write32(cpu,stream+12,0x80D);
+    mem_write32(cpu,stream+24,0x00010405);
+    mem_write32(cpu,stream+28,2);
+    cpu->gpr[3]=fetch;cpu->gpr[4]=fetch_program;cpu->gpr[5]=1;cpu->gpr[6]=stream;
+    cpu->gpr[7]=cpu->gpr[8]=0;
+    wiiu_gx2_handle_import(cpu,"GX2InitFetchShaderEx");
+    cpu->gpr[3]=fetch;wiiu_gx2_handle_import(cpu,"GX2SetFetchShader");
+    write_words_le(cpu,pp,masked_cf,6);
+    write_words_le(cpu,pp+288,dead_mov,2);
+    mem_write32(cpu,ps+0xA4,296);
+    for(u32 target=0;target<8;++target) {
+        cpu->gpr[3]=color;cpu->gpr[4]=target;
+        wiiu_gx2_handle_import(cpu,"GX2SetColorBuffer");
+    }
+    for(u32 enabled=0;enabled<2;++enabled) {
+        cpu->gpr[3]=color;cpu->fpr[1]=cpu->fpr[2]=cpu->fpr[3]=0;cpu->fpr[4]=1;
+        wiiu_gx2_handle_import(cpu,"GX2ClearColor");
+        cpu->gpr[3]=0xCC;cpu->gpr[4]=0;cpu->gpr[5]=0;cpu->gpr[6]=1;
+        wiiu_gx2_handle_import(cpu,"GX2SetColorControl");
+        for(u32 i=0;i<8;++i)cpu->gpr[3+i]=i==0 || (enabled && i==1)?15:0;
+        wiiu_gx2_handle_import(cpu,"GX2SetTargetChannelMasks");
+        cpu->gpr[3]=4;cpu->gpr[4]=3;cpu->gpr[5]=0;cpu->gpr[6]=1;
+        wiiu_gx2_handle_import(cpu,"GX2DrawEx");
+        u8 pixels[16*16*4];
+        if(!wiiu_gx2_readback_color_buffer(color,pixels,16,16,64))return 1;
+        if(pixels[2]!=(enabled?0:255)) {
+            u32 peak=0;for(u32 i=0;i<256;++i)if(pixels[i*4+2]>peak)peak=pixels[i*4+2];
+            fprintf(stderr,"Masked MRT enabled=%u red=%u peak=%u\n",enabled,pixels[2],peak);return 1;
+        }
+    }
     fprintf(stderr,"Textureless constant triangle: blending, scissor, display-list and rejection tests passed\n");
+    return 0;
+}
+
+static int test_array_texture(CPUState* cpu,u32 color) {
+    const u32 vs=color+0x10000, ps=vs+512, vp=vs+1024, pp=vs+1536;
+    const u32 vertices=vs+2048, uniforms=vs+2300, texture=vs+3000, image=vs+3400;
+    const u32 vs_cf[]={0,0x09800000,0x20,0xA0100000,0xA03C,0x94000688,0xC000,0x94200688};
+    const u32 vs_alu[]={0x001F0001,0x00200CB0,0x001F0401,0x20200CB0,
+        0x001F0100,0x40200C90,0x801F00FD,0x60200C90,0x3F800000,0};
+    const u32 ps_cf[]={16,0x80800000,0,0x94200688};
+    const u32 tex_words[]={0x10,0xB00D1000,0x68800000,0};
+    wiiu_gx2_reset();
+    for(u32 i=0;i<4096;++i) mem_write8(cpu,vs+i,0);
+    mem_write32(cpu,vs+0xD0,296);mem_write32(cpu,vs+0xD4,vp);
+    mem_write32(cpu,ps+0xA4,144);mem_write32(cpu,ps+0xA8,pp);
+    mem_write32(cpu,ps+8,0x14000001);mem_write32(cpu,ps+0x10,1);
+    mem_write32(cpu,ps+0x14,0x100);
+    const u32 fetch=vs+3500, stream=vs+3540, fetch_program=vs+3600;
+    mem_write32(cpu,stream+12,0x80D); /* FLOAT_32_32 */
+    mem_write32(cpu,stream+24,0x00010405); /* x,y,0,1 */
+    mem_write32(cpu,stream+28,2);
+    cpu->gpr[3]=fetch;cpu->gpr[4]=fetch_program;cpu->gpr[5]=1;
+    cpu->gpr[6]=stream;cpu->gpr[7]=0;
+    wiiu_gx2_handle_import(cpu,"GX2InitFetchShaderEx");
+    cpu->gpr[3]=fetch;wiiu_gx2_handle_import(cpu,"GX2SetFetchShader");
+    write_words_le(cpu,vp,vs_cf,8);write_words_le(cpu,vp+256,vs_alu,10);
+    write_words_le(cpu,pp,ps_cf,4);write_words_le(cpu,pp+128,tex_words,4);
+    cpu->gpr[3]=vs;wiiu_gx2_handle_import(cpu,"GX2SetVertexShader");
+    cpu->gpr[3]=ps;wiiu_gx2_handle_import(cpu,"GX2SetPixelShader");
+    cpu->gpr[3]=color;cpu->gpr[4]=0;wiiu_gx2_handle_import(cpu,"GX2SetColorBuffer");
+    const float xy[3][2]={{-.5f,.5f},{1.5f,.5f},{-.5f,-1.5f}};
+    for(u32 i=0;i<3;++i) {
+        write_float(cpu,vertices+i*32,xy[i][0]);write_float(cpu,vertices+i*32+4,xy[i][1]);
+    }
+    cpu->gpr[3]=0;cpu->gpr[4]=96;cpu->gpr[5]=32;cpu->gpr[6]=vertices;
+    wiiu_gx2_handle_import(cpu,"GX2SetAttribBuffer");
+    mem_write32(cpu,texture,5);mem_write32(cpu,texture+4,1);mem_write32(cpu,texture+8,1);
+    mem_write32(cpu,texture+12,3);mem_write32(cpu,texture+0x14,0x1A);
+    mem_write32(cpu,texture+0x20,12);mem_write32(cpu,texture+0x24,image);
+    mem_write32(cpu,texture+0x30,16);mem_write32(cpu,texture+0x3C,1);
+    mem_write32(cpu,texture+0x84,0x00010203);
+    mem_write32(cpu,image,0xFF0000FF);mem_write32(cpu,image+4,0x00FF00FF);
+    mem_write32(cpu,image+8,0x0000FFFF);
+    for(u32 pass=0;pass<9;++pass) {
+        /* Nonzero first slice, then a one-layer array view of the same image. */
+        mem_write32(cpu,ps+0x14,pass==2?0x1100:0x100);
+        cpu->gpr[3]=ps;wiiu_gx2_handle_import(cpu,"GX2SetPixelShader");
+        mem_write32(cpu,texture+0x7C,pass==2?2:1);mem_write32(cpu,texture+0x80,pass==2?1:2);
+        if(pass>=3) {
+            /* RGBA16, R16 and RGB10A2 UNORM use the float upload path. */
+            mem_write32(cpu,texture,1);mem_write32(cpu,texture+12,1);
+            mem_write32(cpu,texture+0x14,pass==3?0x1F:pass==4?0x05:0x19);
+            mem_write32(cpu,texture+0x20,pass==3?8:pass==4?2:4);
+            mem_write32(cpu,texture+0x7C,0);mem_write32(cpu,texture+0x80,1);
+            mem_write32(cpu,image,pass==3?0:pass==4?0xFFFF0000:0x0000F0FF);
+            mem_write32(cpu,image+4,0xFFFFFFFF);
+        }
+        if(pass>=6) {
+            mem_write32(cpu,texture,2);mem_write32(cpu,texture+12,2);
+            mem_write32(cpu,texture+0x14,0x1A);mem_write32(cpu,texture+0x20,8);
+            mem_write32(cpu,texture+0x80,2);
+            mem_write32(cpu,image,0x00FF00FF);mem_write32(cpu,image+4,0x0000FFFF);
+            const u32 volume_words[]={0x10,0xF00D1000,0x68800000,0};
+            write_words_le(cpu,pp+128,volume_words,4);
+            cpu->gpr[3]=ps;wiiu_gx2_handle_import(cpu,"GX2SetPixelShader");
+            cpu->gpr[3]=vs+3800;cpu->gpr[4]=2;cpu->gpr[5]=1;
+            wiiu_gx2_handle_import(cpu,"GX2InitSampler");
+            cpu->gpr[3]=vs+3800;cpu->gpr[4]=0;
+            wiiu_gx2_handle_import(cpu,"GX2SetPixelSampler");
+            if(pass>=7) {
+                /* Two independently rendered slices, with zero guest backing.
+                   Sampling must consume GPU pixels, not stale CPU storage. */
+                const u32 view=vs+3900;
+                for(u32 at=0;at<0x74;at+=4)mem_write32(cpu,view+at,mem_read32(cpu,texture+at));
+                mem_write32(cpu,view+0x74,0);mem_write32(cpu,view+0x7C,1);
+                mem_write32(cpu,image,0);mem_write32(cpu,image+4,0);
+                for(u32 layer=0;layer<2;++layer) {
+                    mem_write32(cpu,view+0x78,layer);
+                    cpu->gpr[3]=view;cpu->fpr[1]=layer?0:1;
+                    cpu->fpr[2]=pass==8?1:0;cpu->fpr[3]=layer?1:0;cpu->fpr[4]=1;
+                    wiiu_gx2_handle_import(cpu,"GX2ClearColor");
+                }
+            }
+        }
+        cpu->gpr[3]=texture;cpu->gpr[4]=0;wiiu_gx2_handle_import(cpu,"GX2SetPixelTexture");
+        write_float(cpu,uniforms,pass>=6?.5f:pass==1?1:0);
+        cpu->gpr[3]=0;cpu->gpr[4]=4;cpu->gpr[5]=uniforms;
+        wiiu_gx2_handle_import(cpu,"GX2SetVertexUniformReg");
+        cpu->gpr[3]=color;cpu->fpr[1]=cpu->fpr[2]=cpu->fpr[3]=0;cpu->fpr[4]=1;
+        wiiu_gx2_handle_import(cpu,"GX2ClearColor");
+        cpu->gpr[3]=4;cpu->gpr[4]=3;cpu->gpr[5]=0;cpu->gpr[6]=1;
+        wiiu_gx2_handle_import(cpu,"GX2DrawEx");
+        u8 pixels[16*16*4];
+        if(!wiiu_gx2_readback_color_buffer(color,pixels,16,16,64)) return 1;
+        const u8* p=pixels+(8*16+8)*4;
+        if(pass>=6) {
+            if(p[0]<127 || p[0]>128 || (pass==6?(p[1]<127 || p[1]>128 || p[2]):
+                (p[2]<127 || p[2]>128 || p[1]!=(pass==8?255:0)))) {
+                fprintf(stderr,"Volume guest decode/filter BGR=%u,%u,%u\n",p[0],p[1],p[2]);return 1;
+            }
+            continue;
+        }
+        if(p[0]!=((pass && pass!=4)?255:0)||p[1]!=(pass?0:255)||p[2]!=(pass==4?255:0)) {
+            fprintf(stderr,"Array guest view pass=%u BGR=%u,%u,%u\n",pass,p[0],p[1],p[2]);return 1;
+        }
+    }
+    fprintf(stderr,"Array and normalized textures: guest views, decode and GPU sampling passed\n");
     return 0;
 }
 
@@ -503,6 +650,28 @@ static int test_texture_refresh(CPUState* cpu, u32 base) {
         }
     }
     fprintf(stderr,"Texture cache: repeated draw and same-frame invalidation passed\n");
+    /* More than twelve distinct assets must survive a second pass without
+       repeating CPU decompression. Check pixels as well as the decode count. */
+    for(u32 pass=0;pass<2;++pass) {
+        for(u32 asset=0;asset<48;++asset) {
+            u32 image=data+256+asset*16;
+            if(!pass) for(u32 p=0;p<4;++p)
+                mem_write32(cpu,image+p*4,((asset+1)<<24)|0xFFu);
+            mem_write32(cpu,texture+0x24,image);
+            cpu->gpr[3]=texture;cpu->gpr[4]=0;
+            wiiu_gx2_handle_import(cpu,"GX2SetPixelTexture");
+            cpu->gpr[3]=19;cpu->gpr[4]=4;cpu->gpr[5]=0;cpu->gpr[6]=1;
+            wiiu_gx2_handle_import(cpu,"GX2DrawEx");
+            u8 pixels[16];
+            if(!wiiu_gx2_readback_color_buffer(color,pixels,2,2,8) ||
+               pixels[2]!=asset+1 || pixels[0] || pixels[1])return 1;
+        }
+        if(wiiu_gx2_texture_decode_count()!=50) {
+            fprintf(stderr,"Texture cache thrashed: pass=%u decodes=%llu expected=50\n",
+                pass,(unsigned long long)wiiu_gx2_texture_decode_count());return 1;
+        }
+    }
+    fprintf(stderr,"Texture cache: 48-asset working set retained without re-decoding\n");
     return 0;
 }
 
@@ -734,6 +903,7 @@ int main(int argc, char** argv) {
         result |= test_layout_shader(&cpu, color, argv[1],true);
     }
     result |= test_constant_triangle(&cpu, color);
+    result |= test_array_texture(&cpu, color);
     result |= test_material_pixels(color);
     result |= test_surface_copy(&cpu,color);
     if(argc>2) result |= test_captured_font(&cpu,color,argv[2]);

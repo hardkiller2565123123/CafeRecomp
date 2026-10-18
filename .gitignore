@@ -1,9 +1,7 @@
 /build/
 /game/
 /recomp/
-/third_party/*
-!/third_party/DolRecomp/
-/third_party/DolRecomp/build*/
+/third_party/
 /.aider*
 /opencode.json
 *.rpx

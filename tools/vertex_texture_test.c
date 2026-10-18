@@ -10,11 +10,35 @@
 static void le(CPUState* cpu,u32 a,u32 v){for(u32 c=0;c<4;++c)mem_write8(cpu,a+c,(u8)(v>>(c*8)));}
 static u32 bits(float f){u32 b;memcpy(&b,&f,4);return b;}
 static void pair(u8* p,u32 index,u32 a,u32 b){for(u32 c=0;c<4;++c){p[index*8+c]=(u8)(a>>(c*8));p[index*8+4+c]=(u8)(b>>(c*8));}}
+static int scene_formats(CPUState* cpu,u32 data) {
+    WiiUGX2TextureView view={data,4,1,1,1,5,16,0,1,0x00010203,0};
+    float out[4];u8 bgra[4]={0};
+    le(cpu,data,32769);
+    CHECK(wiiu_gx2_software_sample_float(cpu,&view,18,.5f,.5f,out));
+    CHECK(out[0]==32769/65535.0f && out[1]==0 && out[2]==0 && out[3]==1);
+    CHECK(wiiu_gx2_software_blit(cpu,&view,bgra,1,1,4,0,0,1,1,false));
+    CHECK(bgra[0]==0 && bgra[1]==0 && bgra[2]==128 && bgra[3]==255);
+    view.format=0x19;le(cpu,data,1023u|(512u<<10)|(7u<<20)|(2u<<30));
+    CHECK(wiiu_gx2_software_sample_float(cpu,&view,18,.5f,.5f,out));
+    CHECK(out[0]==1 && out[1]==512/1023.0f && out[2]==7/1023.0f && out[3]==2/3.0f);
+    CHECK(wiiu_gx2_software_blit(cpu,&view,bgra,1,1,4,0,0,1,1,false));
+    CHECK(bgra[0]==2 && bgra[1]==128 && bgra[2]==255 && bgra[3]==170);
+    view.format=0x816;le(cpu,data,(15u<<6)|((19u<<6)<<11)|((14u<<5)<<22));
+    CHECK(wiiu_gx2_software_sample_float(cpu,&view,18,.5f,.5f,out));
+    CHECK(out[0]==1 && out[1]==16 && out[2]==.5f && out[3]==1);
+    CHECK(wiiu_gx2_software_decode_float(cpu,&view,out));
+    CHECK(out[0]==1 && out[1]==16 && out[2]==.5f && out[3]==1);
+    view.image_size=3;CHECK(!wiiu_gx2_software_sample_float(cpu,&view,18,.5f,.5f,out));
+    view.image_size=4;view.format=0x119;
+    CHECK(!wiiu_gx2_software_sample_float(cpu,&view,18,.5f,.5f,out));
+    return 0;
+}
 int main(void) {
     WiiUMemory memory;CPUState cpu={0};wiiu_memory_init(&memory);
     const u32 base=0x11000000,texture=base,sampler=base+256,data=base+4096;
     CHECK(wiiu_memory_add_segment(&memory,"vertex texture fixture",base,65536,NULL,true));
     wiiu_memory_bind_cpu(&memory,&cpu);wiiu_gx2_reset();
+    CHECK(!scene_formats(&cpu,data));
     const u32 point=2|(2<<3),linear=point|(1<<9)|(1<<12);
     le(&cpu,data,bits(-2));le(&cpu,data+4,bits(4));
     WiiUGX2TextureView view={data,8,2,1,1,0x80e,16,0,2,0x00040505,0};float out[4];
@@ -87,6 +111,27 @@ int main(void) {
     CHECK(wiiu_gx2_sample_vertex_texture(&cpu,3,5,.5f,.5f,0,out) && out[0]==4);
     /* Sample an actual GPU render target, then change it to check that the
        CPU readback cache never returns the previous render pass. */
+    const u32 array=base+0x4000,array_data=base+0x4100;
+    mem_write32(&cpu,array,5);mem_write32(&cpu,array+4,1);mem_write32(&cpu,array+8,1);
+    mem_write32(&cpu,array+12,3);mem_write32(&cpu,array+0x14,0x1f);
+    mem_write32(&cpu,array+0x20,24);mem_write32(&cpu,array+0x24,array_data);
+    mem_write32(&cpu,array+0x30,16);mem_write32(&cpu,array+0x3c,1);
+    mem_write32(&cpu,array+0x7c,1);mem_write32(&cpu,array+0x80,2);
+    mem_write32(&cpu,array+0x84,0x00010203);
+    for(u32 i=0;i<3;++i){le(&cpu,array_data+i*8,16384*i);le(&cpu,array_data+i*8+4,0xffff0000);}
+    cpu.gpr[3]=array;cpu.gpr[4]=4;wiiu_gx2_handle_import(&cpu,"GX2SetVertexTexture");
+    mem_write32(&cpu,array+0x80,0); /* The binding must retain its view snapshot. */
+    CHECK(wiiu_gx2_sample_vertex_texture_layer(&cpu,4,5,.5f,.5f,.49f,0,out));
+    CHECK(out[0]==16384/65535.0f && out[3]==1);
+    CHECK(wiiu_gx2_sample_vertex_texture_layer(&cpu,4,5,.5f,.5f,.5f,0,out));
+    CHECK(out[0]==32768/65535.0f);
+    CHECK(wiiu_gx2_sample_vertex_texture_layer(&cpu,4,5,.5f,.5f,100,0,out) && out[0]==32768/65535.0f);
+    CHECK(wiiu_gx2_sample_vertex_texture_layer(&cpu,4,5,.5f,.5f,-10,0,out) && out[0]==16384/65535.0f);
+    CHECK(!wiiu_gx2_sample_vertex_texture_layer(&cpu,4,5,.5f,.5f,NAN,0,out));
+    pair(program,16,0x00000411,0xF00D1001);pair(program,17,0x68828000,0);
+    in.sample_texture_layer=wiiu_gx2_sample_vertex_texture_layer;in.gpr[0][2]=bits(1);
+    CHECK(wiiu_latte_execute_vertex(program,sizeof(program),&in,&vertex));
+    CHECK(vertex.position[0]==32768/65535.0f);
     mem_write32(&cpu,texture+0x14,7);
     mem_write32(&cpu,texture+0x84,0x00010203);
     cpu.gpr[3]=texture;cpu.gpr[4]=3;wiiu_gx2_handle_import(&cpu,"GX2SetVertexTexture");
@@ -122,6 +167,25 @@ int main(void) {
         u8 pixel[4];CHECK(wiiu_window_gpu_readback(base+0x6000+i*16,pixel,1,1,4));
         CHECK(pixel[2]==i && pixel[3]==255);
     }
+    /* Initialized hardware selectors override stale descriptive compSel.
+       In particular, a mask's alpha may be changed from constant one to R. */
+    mem_write32(&cpu,texture+0x24,base+0x9000);
+    mem_write32(&cpu,base+0x9000,0x000000ff);
+    mem_write32(&cpu,texture+0x20,4);
+    mem_write32(&cpu,texture+0x84,0x00000005);
+    cpu.gpr[3]=texture;wiiu_gx2_handle_import(&cpu,"GX2InitTextureRegs");
+    CHECK(mem_read32(&cpu,texture+0x98)==0x800000f0u);
+    CHECK(((mem_read32(&cpu,texture+0x90)>>25)&7)==5);
+    u32 resource=mem_read32(&cpu,texture+0x90)&~(7u<<25);
+    mem_write32(&cpu,texture+0x90,resource);
+    cpu.gpr[3]=texture;cpu.gpr[4]=3;wiiu_gx2_handle_import(&cpu,"GX2SetVertexTexture");
+    CHECK(wiiu_gx2_sample_vertex_texture(&cpu,3,5,.5f,.5f,0,out));
+    CHECK(out[0]==0 && out[3]==0);
+    CHECK(mem_read32(&cpu,texture+0x84)==0x00000005);
+    mem_write32(&cpu,texture+0x90,resource|(5u<<25));
+    CHECK(wiiu_gx2_sample_vertex_texture(&cpu,3,5,.5f,.5f,0,out) && out[3]==0);
+    cpu.gpr[3]=texture;cpu.gpr[4]=3;wiiu_gx2_handle_import(&cpu,"GX2SetVertexTexture");
+    CHECK(wiiu_gx2_sample_vertex_texture(&cpu,3,5,.5f,.5f,0,out) && out[3]==1);
     wiiu_gx2_reset();wiiu_memory_free(&memory);
     puts("Vertex TEX: float precision, filtering, bindings, replay and context verified");return 0;
 }

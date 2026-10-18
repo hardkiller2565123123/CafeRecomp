@@ -69,6 +69,26 @@ int main(void) {
     CHECK(wiiu_imports_host_call(&cpu, cpu.pc));
     CHECK(cpu.pc == cpu.lr && cpu.gpr[3] == 0);
     CHECK(wiiu_filesystem_dlc_probe_count() == probes + 1);
+    /* Reading an unset thread-specific slot must not manufacture a pointer
+       and suppress the game's lazy per-thread initialization. */
+    strcpy(rpx.symbols[0].name, "OSGetThreadSpecific");
+    strcpy(rpx.symbols[1].name, "OSSetThreadSpecific");
+    wiiu_imports_attach_rpx(&rpx);
+    for (unsigned i = 0; i < 2; ++i) {
+        cpu.pc = rpx.symbols[0].value; cpu.gpr[3] = 7;
+        CHECK(wiiu_imports_host_call(&cpu, cpu.pc));
+        CHECK(cpu.pc == cpu.lr && cpu.gpr[3] == 0);
+    }
+    cpu.pc = rpx.symbols[1].value; cpu.gpr[3] = 7; cpu.gpr[4] = 0x12345678;
+    CHECK(wiiu_imports_host_call(&cpu, cpu.pc));
+    cpu.pc = rpx.symbols[0].value; cpu.gpr[3] = 7;
+    CHECK(wiiu_imports_host_call(&cpu, cpu.pc) && cpu.gpr[3] == 0x12345678);
+    cpu.pc = rpx.symbols[0].value; cpu.gpr[3] = 8;
+    CHECK(wiiu_imports_host_call(&cpu, cpu.pc) && cpu.gpr[3] == 0);
+    cpu.pc = rpx.symbols[1].value; cpu.gpr[3] = 7; cpu.gpr[4] = 0;
+    CHECK(wiiu_imports_host_call(&cpu, cpu.pc));
+    cpu.pc = rpx.symbols[0].value; cpu.gpr[3] = 7;
+    CHECK(wiiu_imports_host_call(&cpu, cpu.pc) && cpu.gpr[3] == 0);
     /* Match the real import-table size; uncached ordinary PCs are the common
        path during loading. Timing is diagnostic, never a flaky test limit. */
     memset(&rpx, 0, sizeof(rpx));

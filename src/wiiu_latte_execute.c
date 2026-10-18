@@ -5,7 +5,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+static unsigned g_vertex_failure_line;
+unsigned wiiu_latte_vertex_failure_line(void) { return g_vertex_failure_line; }
 static bool unsupported(unsigned line) {
+    if(!g_vertex_failure_line)g_vertex_failure_line=line;
     /* Opt-in offline diagnostics; ordinary draws remain silent. */
     const char* trace=getenv("BOTW_LATTE_TRACE");
     if(trace && *trace=='1') fprintf(stderr,"latte: rejected at executor line %u\n",line);
@@ -363,7 +366,8 @@ static bool fetch_uniform_clause(State* s,const uint8_t* program,size_t size,uin
             unsigned x=(w2>>20)&7,y=(w2>>23)&7,w=(w2>>29)&7;
             if((w0&0xFF8000E0u) || (w1&0x0FE00180u) || (w1&0x30000000u)!=0x30000000u ||
                (w2&32767) || x>=4 || y>=4 || texture>=32 ||
-               !(s->valid[src]&(1u<<x)) || !(s->valid[src]&(1u<<y)) || !s->inputs->sample_texture)
+               !(s->valid[src]&(1u<<x)) || !(s->valid[src]&(1u<<y)) ||
+               (!s->inputs->sample_texture && !s->inputs->sample_texture_layer))
                 return unsupported(__LINE__);
             /* Implicit derivatives do not exist in a vertex shader: SAMPLE
                uses level zero, while SAMPLE_L reads the explicit W selector. */
@@ -372,8 +376,15 @@ static bool fetch_uniform_clause(State* s,const uint8_t* program,size_t size,uin
                 if(w>=4 || !(s->valid[src]&(1u<<w)))return unsupported(__LINE__);
                 lod=as_float(s->r[src][w]);
             }
-            if(!s->inputs->sample_texture(s->inputs->texture_user,texture,sampler,
-                as_float(s->r[src][x]),as_float(s->r[src][y]),lod,result))return unsupported(__LINE__);
+            bool sampled;
+            if(s->inputs->sample_texture_layer) {
+                unsigned z=(w2>>26)&7;
+                float layer=z<4 && (s->valid[src]&(1u<<z))?as_float(s->r[src][z]):z==4?0:z==5?1:NAN;
+                sampled=s->inputs->sample_texture_layer(s->inputs->texture_user,texture,sampler,
+                    as_float(s->r[src][x]),as_float(s->r[src][y]),layer,lod,result);
+            } else sampled=s->inputs->sample_texture(s->inputs->texture_user,texture,sampler,
+                as_float(s->r[src][x]),as_float(s->r[src][y]),lod,result);
+            if(!sampled)return unsupported(__LINE__);
             for(unsigned c=0;c<4;++c) {
                 unsigned sel=(w1>>(9+c*3))&7;
                 if(sel==7)continue;if(sel==6)return unsupported(__LINE__);
@@ -407,6 +418,7 @@ static bool fetch_uniform_clause(State* s,const uint8_t* program,size_t size,uin
 }
 bool wiiu_latte_execute_vertex(const uint8_t* program,size_t size,
     const WiiULatteVertexInputs* inputs,WiiULatteVertexOutputs* outputs) {
+    g_vertex_failure_line=0;
     if(!program || !inputs || !outputs || size<8 || size>1048576 || size%8) return unsupported(__LINE__);
     State s={0}; s.inputs=inputs;s.active=true;
     const char* trace=getenv("BOTW_LATTE_TRACE");s.trace_alu=trace && *trace=='2';

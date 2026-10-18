@@ -16,6 +16,7 @@ typedef struct {
     bool ok;
     uint8_t valid[128], origin[128][4], pv;
     Branch branches[16];unsigned depth;
+    uint32_t channels;
 } Emit;
 static bool predicate(Ins i){return !i.three && ((i.op>=0x20 && i.op<=0x23) || (i.op>=0x42 && i.op<=0x45));}
 static uint32_t le(const uint8_t* p) {
@@ -39,7 +40,7 @@ static unsigned argc_ins(Ins i) {
     switch(i.op) {
     case 0x1a:return 0;
     case 0x10:case 0x11:case 0x13:case 0x14:case 0x19:case 0x33:case 0x61:case 0x62:
-    case 0x63:case 0x66:case 0x69:case 0x6a:case 0x6b:case 0x6c:case 0x6d:
+    case 0x16:case 0x18:case 0x63:case 0x66:case 0x69:case 0x6a:case 0x6b:case 0x6c:case 0x6d:
     case 0x6e:case 0x6f:case 0x79:return 1;
     default:return 2;
     }
@@ -48,9 +49,15 @@ static unsigned sel(Ins i,unsigned n) {return n==0?i.a&511:n==1?(i.a>>13)&511:i.
 static unsigned chan(Ins i,unsigned n) {return n==0?(i.a>>10)&3:n==1?(i.a>>23)&3:(i.b>>10)&3;}
 static bool source(Emit* e,Ins i,unsigned n,uint32_t a,uint32_t b,const uint32_t lit[4],char dst[96]) {
     unsigned s=sel(i,n),c=chan(i,n);
-    if(n==0?(i.a>>9)&1:n==1?(i.a>>22)&1:(i.b>>9)&1)return false;
+    bool relative=n==0?(i.a>>9)&1:n==1?(i.a>>22)&1:(i.b>>9)&1;
     char raw[64];
-    if(s<128) {
+    if(relative) {
+        unsigned index=(i.a>>26)&7;
+        if(s<256 || index>3)return false;
+        e->out->relative_uniforms=true;
+        emit(e,"if(!(arValid&%uu))discard;{int ix=ar[%u]+%u;if(ix<0||ix>=256)discard;if(!(uv[ix].x&%uu))discard;}\n",1u<<index,index,s-256,1u<<c);
+        snprintf(raw,sizeof(raw),"u[ar[%u]+%u][%u]",index,s-256,c);
+    } else if(s<128) {
         if(!read_lane(e,s,c))return false;
         snprintf(raw,sizeof(raw),"r[%u][%u]",s,c);
     } else if((s>=128 && s<192) || s>=256) {
@@ -87,7 +94,7 @@ static bool source(Emit* e,Ins i,unsigned n,uint32_t a,uint32_t b,const uint32_t
     bool abs=!i.three && ((i.b>>n)&1);
     bool neg=n==0?(i.a>>12)&1:n==1?(i.a>>25)&1:(i.b>>12)&1;
     bool integer=i.three?(i.op>=0x1c && i.op<=0x1e && n==0):
-        (i.op>=0x30 && i.op<=0x45) || i.op==0x6c || i.op==0x6d || (i.op>=0x70 && i.op<=0x75);
+        (i.op>=0x30 && i.op<=0x45) || i.op==0x18 || i.op==0x6c || i.op==0x6d || (i.op>=0x70 && i.op<=0x75);
     if(integer) {
         if(abs)return false; /* no integer absolute modifier in this subset */
         snprintf(dst,96,"asfloat(%s(%s))",neg?"0u-":"",raw);
@@ -127,6 +134,8 @@ static bool expression(Ins i,char* dst,size_t size) {
     case 0x11:expression="trunc(a)";break;
     case 0x13:expression="round(a)";break;
     case 0x14:expression="floor(a)";break;
+    case 0x16:expression="clamp(floor(a),-256.0,255.0)";break;
+    case 0x18:expression="asfloat(clamp(asint(a),-256,255))";break;
     case 0x19:expression="a";break;
     case 0x1a:expression="0.0";break;
     case 0x20:expression="a==b?1.0:0.0";break;
@@ -189,6 +198,7 @@ static bool alu(Emit* e,const uint8_t* p,size_t size,uint32_t a,uint32_t b) {
                 if(!push || has_predicate || (i.b&0x80000070u) || (i.b&12)!=12)return false;
                 has_predicate=true;
             } else if(!i.three && (i.b&12))return false;
+            if(!i.three && (i.op==0x16 || i.op==0x18) && (i.b&0x80000070u))return false;
             i.unit=!i.three && ((i.op>=0x61 && i.op<=0x6f) || i.op==0x73 || i.op==0x75 || i.op==0x79)?4:(i.b>>29)&3;
             if(units&(1u<<i.unit))i.unit=4;
             if(units&(1u<<i.unit))return false;
@@ -203,10 +213,38 @@ static bool alu(Emit* e,const uint8_t* p,size_t size,uint32_t a,uint32_t b) {
         at+=slots;
         if(has_predicate && at!=end)return false;
         /* Evaluate every lane before writing any GPR/PV. */
+        bool undefined[5]={0};
         for(unsigned j=0;j<n;++j) {
             Ins i=ins[j];char args[3][96]={"0","0","0"},expr[128];
             e->out->instruction_offset=i.offset;
-            if(!i.three && (i.op==0x50 || i.op==0x51)) {
+            /* Propagate dead MOV lanes instead of inventing shader values.
+               A later read/export to an attached target still fails. */
+            if(e->channels!=UINT32_MAX && !i.three && i.op==0x19 && !(i.a&512) &&
+               sel(i,0)<128 && !(e->valid[sel(i,0)]&(1u<<chan(i,0)))) {
+                undefined[j]=true;continue;
+            }
+            if(!i.three && i.op==0x52) {
+                /* R600 ISA 7-56: one four-lane CUBE reduction, zzxy/yxzz.
+                   Keep raw coordinates; normalization belongs to the shader. */
+                if(n<4 || i.unit>=4)return false;
+                char operands[4][2][96];
+                for(unsigned k=0;k<4;++k) {
+                    if(ins[k].three || ins[k].op!=0x52 || ins[k].unit!=k ||
+                       (ins[k].b&0x80000060u)!=(i.b&0x80000060u))return false;
+                    for(unsigned s=0;s<2;++s)
+                        if(!source(e,ins[k],s,a,b,lit,operands[k][s]))return false;
+                }
+                if(strcmp(operands[0][0],operands[1][0]) ||
+                   strcmp(operands[0][0],operands[2][1]) ||
+                   strcmp(operands[0][0],operands[3][1]) ||
+                   strcmp(operands[2][0],operands[1][1]) ||
+                   strcmp(operands[3][0],operands[0][1]))return false;
+                emit(e,"{float x=%s,y=%s,z=%s;float4 q;",
+                    operands[2][0],operands[3][0],operands[0][0]);
+                emit(e,"if(abs(z)>=abs(x)&&abs(z)>=abs(y))q=float4(-y,sign(z)*x,2*z,z<0?5:4);"
+                    "else if(abs(y)>=abs(x))q=float4(sign(y)*z,x,2*y,y<0?3:2);"
+                    "else q=float4(-y,sign(x)*z,2*x,x<0?1:0);float v=q[%u];",i.unit);
+            } else if(!i.three && (i.op==0x50 || i.op==0x51)) {
                 if(n<4 || i.unit>=4)return false;
                 emit(e,"{float v=0;");
                 for(unsigned k=0;k<4;++k) {
@@ -217,14 +255,34 @@ static bool alu(Emit* e,const uint8_t* p,size_t size,uint32_t a,uint32_t b) {
             } else {
                 if(!expression(i,expr,sizeof(expr)))return false;
             for(unsigned k=0;k<argc_ins(i);++k)if(!source(e,i,k,a,b,lit,args[k]))return false;
+            if(!i.three && (i.op==0x6b || i.op==0x79)) {
+                /* Keep integer results as bits: a float temporary can flush
+                   small integer payloads as denormals in a mixed ALU group. */
+                if(i.b&0x80000060u)return false;
+                emit(e,"t[%u]=%s(%s);\n",j,i.op==0x6b?"(uint)(int)":"(uint)",args[0]);
+                continue;
+            }
+            if(!i.three && (i.op==0x6c || i.op==0x6d)) {
+                /* source() wraps raw bits in asfloat for ordinary ALU math.
+                   Integer conversion must consume the raw expression instead. */
+                size_t length=strlen(args[0]);
+                if(strncmp(args[0],"asfloat(",8) || length<10)return false;
+                emit(e,"{float v=(float)%s(%.*s);",i.op==0x6c?"(int)":"(uint)",(int)length-9,args[0]+8);
+                unsigned modifier=(i.b>>5)&3;
+                if(modifier)emit(e,"v*=%s;",modifier==1?"2.0":modifier==2?"4.0":"0.5");
+                if(i.b>>31)emit(e,"v=saturate(v);");
+                emit(e,"t[%u]=asuint(v);}\n",j);
+                continue;
+            }
             emit(e,"{float a=%s,b=%s,c=%s; float v=(%s);",args[0],args[1],args[2],expr);
             }
             unsigned omod=i.three?0:(i.b>>5)&3;
             bool integer_result=!i.three && ((i.op>=0xc && i.op<=0xf) || (i.op>=0x30 && i.op<=0x3f) ||
                 i.op==0x6b || (i.op>=0x70 && i.op<=0x75) || i.op==0x79);
             if(integer_result && (omod || (i.b>>31)))return false;
-            if(omod)emit(e,"v*=%s;",omod==1?"2.0":omod==2?"4.0":"0.5");
-            if(i.b>>31)emit(e,"v=saturate(v);");
+            bool cube_face=!i.three && i.op==0x52 && i.unit==3;
+            if(omod && !cube_face)emit(e,"v*=%s;",omod==1?"2.0":omod==2?"4.0":"0.5");
+            if((i.b>>31) && !cube_face)emit(e,"v=saturate(v);");
             if(predicate(i))emit(e,"pred=v!=0;");
             emit(e,"t[%u]=asuint(v);}\n",j);
         }
@@ -232,7 +290,18 @@ static bool alu(Emit* e,const uint8_t* p,size_t size,uint32_t a,uint32_t b) {
         for(unsigned j=0;j<n;++j) {
             Ins i=ins[j];if(!i.three && i.op==0x1a)continue;
             if(predicate(i))continue;
+            if(undefined[j]) {
+                if(i.b&16) {
+                    unsigned r=(i.b>>21)&127,c=(i.b>>29)&3;
+                    e->valid[r]&=~(1u<<c);e->origin[r][c]=0;
+                }
+                continue;
+            }
             emit(e,"pv[%u]=t[%u];\n",i.unit,j);e->pv|=1u<<i.unit;
+            if(!i.three && (i.op==0x16 || i.op==0x18)) {
+                unsigned channel=(i.b>>29)&3;
+                emit(e,"ar[%u]=%s(t[%u]);arValid|=%uu;\n",channel,i.op==0x16?"(int)asfloat":"asint",j,1u<<channel);
+            }
             if(i.three || (i.b&16)) {
                 unsigned r=(i.b>>21)&127,c=(i.b>>29)&3;
                 emit(e,"r[%u][%u]=t[%u];\n",r,c,j);
@@ -284,23 +353,48 @@ static bool tex(Emit* e,const uint8_t* p,size_t size,uint32_t a,uint32_t b) {
             emit(e,"}\n");continue;
         }
         /* Normalized 2D sampling, including whole-texel XY offsets. */
-        if((op<0x10 || op>0x13) || (x&0xFF8000E0u) ||
+        if((op<0x0f || op>0x13) || (x&0xFF8000E0u) ||
            (y&0x0FE00180u) || (y&0x30000000u)!=0x30000000u ||
-           (z&0x7c21u) || texture>=16 || sampler>=16)return false;
+           (z&0x7c21u) || texture>=WIIU_PIXEL_TEXTURES || sampler>=16)return false;
         int ox=(int)(z&31),oy=(int)((z>>5)&31);
         if(ox&16)ox-=32;if(oy&16)oy-=32;ox/=2;oy/=2;
         unsigned sx=(z>>20)&7,sy=(z>>23)&7;
         if(sx>=4 || sy>=4 || !read_lane(e,r,sx) || !read_lane(e,r,sy))return false;
         e->out->texture_mask|=1u<<texture;e->out->sampler_mask|=1u<<sampler;
-        if(op==0x10)emit(e,"{float4 q=T%u.Sample(S%u,float2(asfloat(r[%u][%u]),asfloat(r[%u][%u])),int2(%d,%d));\n",texture,sampler,r,sx,r,sy,ox,oy);
+        char coord[144];
+        bool volume=(e->out->volume_texture_mask&(1u<<texture))!=0;
+        if(volume && (op==0x0f || !(y&0x40000000u)))return false;
+        if((e->out->array_texture_mask|e->out->volume_texture_mask)&(1u<<texture)) {
+            unsigned sz=(z>>26)&7;
+            if(sz<4) {
+                if(!read_lane(e,r,sz))return false;
+                snprintf(coord,sizeof(coord),"float3(asfloat(r[%u][%u]),asfloat(r[%u][%u]),asfloat(r[%u][%u]))",r,sx,r,sy,r,sz);
+            } else if(sz==4 || sz==5)
+                snprintf(coord,sizeof(coord),"float3(asfloat(r[%u][%u]),asfloat(r[%u][%u]),%u)",r,sx,r,sy,sz-4);
+            else return false;
+        } else snprintf(coord,sizeof(coord),"float2(asfloat(r[%u][%u]),asfloat(r[%u][%u]))",r,sx,r,sy);
+        if(op==0x0f) {
+            /* FETCH4 gathers the view's red component, not four RGBA lanes.
+               D3D/GL gather order maps to Latte as z,x,y,w. */
+            emit(e,"{%s uv=%s;float4 q;\n",(e->out->array_texture_mask&(1u<<texture))?"float3":"float2",coord);
+            const char* channels[4]={"Red","Green","Blue","Alpha"};
+            for(unsigned c=0;c<4;++c)
+                emit(e,"%sif(m[%u].x==%u)q=T%u.Gather%s(S%u,uv,int2(%d,%d));\n",c?"else ":"",texture,c,texture,channels[c],sampler,ox,oy);
+            emit(e,"else q=m[%u].x==5?1:0;q=q.zxyw;\n",texture);
+        }
+        else if(op==0x10) {
+            if(volume)emit(e,"{float4 q=T%u.Sample(S%u,%s,int3(%d,%d,0));\n",texture,sampler,coord,ox,oy);
+            else emit(e,"{float4 q=T%u.Sample(S%u,%s,int2(%d,%d));\n",texture,sampler,coord,ox,oy);
+        }
         else {
             unsigned lod=(z>>29)&7;
             if(op!=0x13 && (lod>=4 || !read_lane(e,r,lod)))return false;
-            emit(e,"{float4 q=T%u.%s(S%u,float2(asfloat(r[%u][%u]),asfloat(r[%u][%u])),",texture,op==0x12?"SampleBias":"SampleLevel",sampler,r,sx,r,sy);
+            emit(e,"{float4 q=T%u.%s(S%u,%s,",texture,op==0x12?"SampleBias":"SampleLevel",sampler,coord);
             if(op!=0x13)emit(e,"asfloat(r[%u][%u])",r,lod);else emit(e,"0");
-            emit(e,",int2(%d,%d));\n",ox,oy);
+            if(volume)emit(e,",int3(%d,%d,0));\n",ox,oy);
+            else emit(e,",int2(%d,%d));\n",ox,oy);
         }
-        emit(e,"q=float4(ch(q,m[%u].x),ch(q,m[%u].y),ch(q,m[%u].z),ch(q,m[%u].w));\n",texture,texture,texture,texture);
+        if(op!=0x0f)emit(e,"q=float4(ch(q,m[%u].x),ch(q,m[%u].y),ch(q,m[%u].z),ch(q,m[%u].w));\n",texture,texture,texture,texture);
         for(unsigned c=0;c<4;++c) {
             unsigned s=(y>>(9+c*3))&7;
             if(s==7)continue;if(s==6)return false;
@@ -313,22 +407,52 @@ static bool tex(Emit* e,const uint8_t* p,size_t size,uint32_t a,uint32_t b) {
     return e->ok;
 }
 bool wiiu_latte_translate_pixel(const uint8_t* p,size_t size,unsigned inputs,WiiULattePixelProgram* out) {
+    return wiiu_latte_translate_pixel_position(p,size,inputs,UINT32_MAX,out);
+}
+bool wiiu_latte_translate_pixel_position(const uint8_t* p,size_t size,unsigned inputs,unsigned position,WiiULattePixelProgram* out) {
+    return wiiu_latte_translate_pixel_layout(p,size,inputs,position,0,out);
+}
+bool wiiu_latte_translate_pixel_layout(const uint8_t* p,size_t size,unsigned inputs,unsigned position,uint32_t arrays,WiiULattePixelProgram* out) {
+    return wiiu_latte_translate_pixel_interpolation(p,size,inputs,position,arrays,0,out);
+}
+bool wiiu_latte_translate_pixel_interpolation(const uint8_t* p,size_t size,unsigned inputs,unsigned position,uint32_t arrays,uint32_t linear,WiiULattePixelProgram* out) {
+    return wiiu_latte_translate_pixel_resources(p,size,inputs,position,arrays,linear,0,out);
+}
+bool wiiu_latte_translate_pixel_resources(const uint8_t* p,size_t size,unsigned inputs,unsigned position,uint32_t arrays,uint32_t linear,uint32_t volumes,WiiULattePixelProgram* out) {
+    return wiiu_latte_translate_pixel_targets(p,size,inputs,position,arrays,linear,volumes,255,out);
+}
+bool wiiu_latte_translate_pixel_targets(const uint8_t* p,size_t size,unsigned inputs,unsigned position,uint32_t arrays,uint32_t linear,uint32_t volumes,uint8_t targets,WiiULattePixelProgram* out) {
+    uint32_t channels=0;
+    for(unsigned i=0;i<8;++i)if(targets&(1u<<i))channels|=15u<<(i*4);
+    return wiiu_latte_translate_pixel_channels(p,size,inputs,position,arrays,linear,volumes,channels,out);
+}
+bool wiiu_latte_translate_pixel_channels(const uint8_t* p,size_t size,unsigned inputs,unsigned position,uint32_t arrays,uint32_t linear,uint32_t volumes,uint32_t channels,WiiULattePixelProgram* out) {
     if(!out)return false;
     memset(out,0,sizeof(*out));
     if(!p || size<8 || size>16384 || size%8 || inputs>WIIU_PIXEL_INPUTS)return false;
-    out->key=2166136261u^inputs;
+    if(position!=UINT32_MAX && position>=inputs)return false;
+    if(linear>>inputs)return false;
+    if(arrays&volumes)return false;
+    out->array_texture_mask=arrays;
+    out->volume_texture_mask=volumes;
+    out->key=2166136261u^inputs^position^arrays;
     for(size_t i=0;i<size;++i)out->key=(out->key^p[i])*16777619u;
-    Emit e={0};e.out=out;e.ok=true;
+    out->key=(out->key^linear)*16777619u;
+    out->key=(out->key^volumes)*16777619u;
+    out->key=(out->key^channels)*16777619u;
+    Emit e={0};e.out=out;e.ok=true;e.channels=channels;
     emit(&e,"struct P {float4 pos:SV_POSITION;");
-    for(unsigned i=0;i<WIIU_PIXEL_INPUTS;++i)emit(&e,"float4 p%u:TEXCOORD%u;",i,i);
-    emit(&e,"};\ncbuffer C:register(b1){uint4 m[16];uint4 k[256];};\n");
-    for(unsigned i=0;i<16;++i)emit(&e,"Texture2D T%u:register(t%u);SamplerState S%u:register(s%u);\n",i,i,i,i);
-    for(unsigned i=0;i<16;++i)emit(&e,"StructuredBuffer<uint4> B%u:register(t%u);\n",i,16+i);
+    for(unsigned i=0;i<WIIU_PIXEL_INPUTS;++i)emit(&e,"%sfloat4 p%u:TEXCOORD%u;",(linear&(1u<<i))?"noperspective ":"",i,i);
+    emit(&e,"};\ncbuffer C:register(b1){uint4 m[%u];uint4 k[256];uint4 alphaTest;uint4 u[256];uint4 uv[256];};\n",WIIU_PIXEL_TEXTURES);
+    for(unsigned i=0;i<WIIU_PIXEL_TEXTURES;++i)emit(&e,"%s T%u:register(t%u);\n",(volumes&(1u<<i))?"Texture3D":(arrays&(1u<<i))?"Texture2DArray":"Texture2D",i,i);
+    for(unsigned i=0;i<16;++i)emit(&e,"SamplerState S%u:register(s%u);\n",i,i);
+    for(unsigned i=0;i<16;++i)emit(&e,"StructuredBuffer<uint4> B%u:register(t%u);\n",i,WIIU_PIXEL_TEXTURES+i);
     emit(&e,"struct O {");
     for(unsigned i=0;i<8;++i)emit(&e,"float4 c%u:SV_TARGET%u;",i,i);
-    emit(&e,"};\nfloat lm(float a,float b){return a==0||b==0?0:a*b;}\nfloat ch(float4 v,uint s){return s<4?v[s]:s==5?1:0;}\nO main(P v) {uint4 r[128];uint pv[5],t[5];bool pred=false;O color=(O)0;\n");
+    emit(&e,"};\nfloat lm(float a,float b){return a==0||b==0?0:a*b;}\nfloat ch(float4 v,uint s){return s<4?v[s]:s==5?1:0;}\nO main(P v) {uint4 r[128];uint pv[5],t[5];int4 ar=0;uint arValid=0;bool pred=false;O color=(O)0;\n");
     for(unsigned i=0;i<inputs;++i) {
         e.valid[i]=15;
+        if(i==position) {emit(&e,"r[%u]=asuint(v.pos);\n",i);continue;}
         for(unsigned c=0;c<4;++c)e.origin[i][c]=(uint8_t)(i+1);
         emit(&e,"r[%u]=asuint(v.p%u);\n",i,i);
     }
@@ -372,8 +496,10 @@ bool wiiu_latte_translate_pixel(const uint8_t* p,size_t size,unsigned inputs,Wii
             if((a&0x6000) || (a&0xFFC00000u) || base+burst>8 || reg+burst>128)return false;
             for(unsigned t=0;t<burst;++t) {
                 unsigned r=reg+t,target=base+t;
+                if(!((channels>>(target*4))&15))continue;
                 if(out->target_mask&(1u<<target))return false;
                 for(unsigned c=0;c<4;++c) {
+                if(!(channels&(1u<<(target*4+c))))continue;
                 unsigned s=(b>>(c*3))&7;
                 if(s<4) {if(!read_lane(&e,r,s))return false;emit(&e,"color.c%u[%u]=asfloat(r[%u][%u]);\n",target,c,r,s);}
                 else if(s==4 || s==5)emit(&e,"color.c%u[%u]=%u;\n",target,c,s-4);
@@ -382,7 +508,10 @@ bool wiiu_latte_translate_pixel(const uint8_t* p,size_t size,unsigned inputs,Wii
                 out->target_mask|=1u<<target;
             }
         } else return false;
-        if(b&(1u<<21)) {emit(&e,"return color;}\n");return !e.depth && out->target_mask && e.ok;}
+        if(b&(1u<<21)) {
+            if(out->target_mask&1)emit(&e,"if((alphaTest.x&8)!=0 && (alphaTest.x&256)==0){uint f=alphaTest.x&7;float a=color.c0.a,b=asfloat(alphaTest.y);bool accepted=f==7 || (f==1 && a<b) || (f==2 && a==b) || (f==3 && a<=b) || (f==4 && a>b) || (f==5 && a!=b) || (f==6 && a>=b);if(!accepted)discard;}\n");
+            emit(&e,"return color;}\n");return !e.depth && out->target_mask && e.ok;
+        }
     }
     return false;
 }

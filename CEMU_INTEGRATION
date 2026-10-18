@@ -1,7 +1,14 @@
 # Cemu Integration Notes
 
-The source checkout at `third_party/Cemu` is the upstream Cemu project at
+The archived source checkout is the upstream Cemu project at
 commit `13d1826b4d018c2b6674f58b9b772e21ba084f61`.
+
+October 10 consolidation: active sources no longer depend on a nested Cemu
+checkout. src/graphics/latte contains the portable GPU extraction supplied by
+ZeldaWWHDRecomp. Its address library and GX2 surface calculations are linked
+into botw_graphics through src/graphics/surface_bridge.cpp. Shader translation
+still uses CafeRecomp's existing D3D11 path; the imported full shader decompiler
+and Vulkan/Metal backends are not yet connected. See SOURCE-ORIGINS for licenses.
 
 `src/wiiu_gx2_cemu_layout.c` is an MPL-2.0 adaptation of Cemu's
 `LatteTextureLoader` layout handling. The recomp renderer uses it to address

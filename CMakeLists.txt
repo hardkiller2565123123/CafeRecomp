@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(CafeRecomp C)
+project(CafeRecomp C CXX)
 
 include(CTest)
 
@@ -9,7 +9,8 @@ endif()
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
-include(FetchContent)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(BOTW_OUTPUT_ROOT "${CMAKE_CURRENT_LIST_DIR}/build")
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${BOTW_OUTPUT_ROOT}/bin")
@@ -22,8 +23,7 @@ foreach(config Debug Release RelWithDebInfo MinSizeRel)
     set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_${config_upper} "${BOTW_OUTPUT_ROOT}/lib")
 endforeach()
 
-set(DOLRECOMP_DIR "${CMAKE_CURRENT_LIST_DIR}/third_party/DolRecomp" CACHE PATH
-    "DolRecomp source directory")
+set(DOLRECOMP_DIR "${CMAKE_CURRENT_LIST_DIR}/src/recompiler")
 set(BOTW_BASE_TITLE_DIR
     "${CMAKE_CURRENT_LIST_DIR}/game/base"
     CACHE PATH "Extracted BOTW base title directory")
@@ -36,37 +36,31 @@ set(BOTW_DLC_TITLE_DIR
 set(GENERATED_DIR "${CMAKE_CURRENT_LIST_DIR}/recomp/generated" CACHE PATH
     "DolRecomp-generated BOTW C output")
 
-if(NOT EXISTS "${GENERATED_DIR}/generated.h")
+option(CAFERECOMP_COMPILER_ONLY "Build the source-generation tool without game files" OFF)
+if(NOT CAFERECOMP_COMPILER_ONLY AND NOT EXISTS "${GENERATED_DIR}/generated.h")
     message(FATAL_ERROR
-        "Missing generated BOTW output. Run .\\generate.ps1 before building.")
+        "Missing generated BOTW output. Run build.bat generate before building.")
 endif()
-if(NOT EXISTS "${BOTW_UPDATE_TITLE_DIR}/code/U-King.rpx")
+if(NOT CAFERECOMP_COMPILER_ONLY AND NOT EXISTS "${BOTW_UPDATE_TITLE_DIR}/code/U-King.rpx")
     message(FATAL_ERROR
         "Missing updated U-King.rpx under BOTW_UPDATE_TITLE_DIR.")
 endif()
 
-set(ZLIB_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-set(ZLIB_BUILD_MINIZIP OFF CACHE BOOL "" FORCE)
-set(ZLIB_BUILD_SHARED OFF CACHE BOOL "" FORCE)
-set(ZLIB_BUILD_STATIC ON CACHE BOOL "" FORCE)
-set(ZLIB_BUILD_TESTING OFF CACHE BOOL "" FORCE)
-set(ZLIB_INSTALL OFF CACHE BOOL "" FORCE)
-FetchContent_Declare(zlib
-    URL https://github.com/madler/zlib/releases/download/v1.3.2/zlib-1.3.2.tar.gz
-    URL_HASH SHA256=bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16
-)
-FetchContent_MakeAvailable(zlib)
+include(cmake/CafeSources.cmake)
+if(CAFERECOMP_COMPILER_ONLY)
+    return()
+endif()
 
 add_library(dolrecomp_cpu STATIC
-    "${DOLRECOMP_DIR}/src/cpu/cpu.c"
+    "${DOLRECOMP_DIR}/cpu/cpu.c"
 )
-target_include_directories(dolrecomp_cpu PUBLIC "${DOLRECOMP_DIR}/src")
+target_include_directories(dolrecomp_cpu PUBLIC "${DOLRECOMP_DIR}")
 
 add_library(dolrecomp_rpx STATIC
     src/rpx_runtime.c
 )
 target_compile_definitions(dolrecomp_rpx PUBLIC DOLRECOMP_HAVE_ZLIB)
-target_include_directories(dolrecomp_rpx PUBLIC "${DOLRECOMP_DIR}/src")
+target_include_directories(dolrecomp_rpx PUBLIC "${DOLRECOMP_DIR}")
 target_link_libraries(dolrecomp_rpx PUBLIC ZLIB::ZLIBSTATIC)
 
 file(GLOB BOTW_GENERATED_CHUNKS CONFIGURE_DEPENDS
@@ -86,7 +80,7 @@ set_target_properties(botw_generated PROPERTIES
 )
 target_include_directories(botw_generated PUBLIC
     "${GENERATED_DIR}"
-    "${DOLRECOMP_DIR}/src"
+    "${DOLRECOMP_DIR}"
 )
 target_link_libraries(botw_generated PUBLIC dolrecomp_cpu)
 if(MSVC)
@@ -103,7 +97,7 @@ set_target_properties(botw_audio PROPERTIES
 )
 target_include_directories(botw_audio PUBLIC
     src
-    "${DOLRECOMP_DIR}/src"
+    "${DOLRECOMP_DIR}"
 )
 if(WIN32)
     target_link_libraries(botw_audio PRIVATE winmm)
@@ -126,9 +120,9 @@ set_target_properties(botw_graphics PROPERTIES
 )
 target_include_directories(botw_graphics PUBLIC
     src
-    "${DOLRECOMP_DIR}/src"
+    "${DOLRECOMP_DIR}"
 )
-target_link_libraries(botw_graphics PRIVATE dolrecomp_cpu)
+target_link_libraries(botw_graphics PRIVATE dolrecomp_cpu cafe_surface)
 if(WIN32)
     target_link_libraries(botw_graphics PRIVATE
         user32 gdi32 d3d11 dxgi d3dcompiler dxguid uuid
@@ -148,7 +142,7 @@ set_target_properties(botw_system PROPERTIES
 target_include_directories(botw_system PUBLIC
     src
     "${GENERATED_DIR}"
-    "${DOLRECOMP_DIR}/src"
+    "${DOLRECOMP_DIR}"
 )
 target_link_libraries(botw_system PUBLIC
     botw_audio
@@ -173,7 +167,7 @@ target_compile_definitions(botw_recomp PRIVATE
 target_include_directories(botw_recomp PRIVATE
     src
     "${GENERATED_DIR}"
-    "${DOLRECOMP_DIR}/src"
+    "${DOLRECOMP_DIR}"
 )
 target_link_libraries(botw_recomp PRIVATE
     botw_generated
@@ -183,7 +177,7 @@ target_link_libraries(botw_recomp PRIVATE
 )
 
 add_executable(botw_rpx_peek tools/rpx_peek.c)
-target_include_directories(botw_rpx_peek PRIVATE src "${DOLRECOMP_DIR}/src")
+target_include_directories(botw_rpx_peek PRIVATE src "${DOLRECOMP_DIR}")
 target_link_libraries(botw_rpx_peek PRIVATE dolrecomp_rpx)
 
 # The launch directory contains only the game launcher and its four DLLs.
@@ -200,7 +194,7 @@ endfunction()
 botw_development_tool(botw_rpx_peek)
 if(WIN32)
     add_executable(botw_guest_sample tools/guest_sample.c)
-    target_include_directories(botw_guest_sample PRIVATE src "${DOLRECOMP_DIR}/src")
+    target_include_directories(botw_guest_sample PRIVATE src "${DOLRECOMP_DIR}")
     botw_development_tool(botw_guest_sample)
 endif()
 
@@ -208,6 +202,13 @@ install(TARGETS botw_recomp botw_generated botw_system botw_graphics botw_audio
     RUNTIME DESTINATION . LIBRARY DESTINATION .)
 
 if(BUILD_TESTING)
+    add_test(NAME cafe_generated_hooks COMMAND ${CMAKE_COMMAND}
+        -DTEST_DIR=${CMAKE_CURRENT_BINARY_DIR}/hook-test
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/TestGeneratedHooks.cmake)
+    add_executable(cafe_surface_test tools/surface_bridge_test.c)
+    target_link_libraries(cafe_surface_test PRIVATE cafe_surface)
+    botw_development_tool(cafe_surface_test)
+    add_test(NAME cafe_surface COMMAND cafe_surface_test)
     add_executable(botw_vertex_texture_test tools/vertex_texture_test.c)
     target_link_libraries(botw_vertex_texture_test PRIVATE botw_graphics dolrecomp_cpu)
     botw_development_tool(botw_vertex_texture_test)
@@ -293,7 +294,7 @@ if(BUILD_TESTING)
         src/wiiu_gx2_cemu_layout.c
     )
     target_include_directories(botw_cemu_layout_test PRIVATE
-        src "${DOLRECOMP_DIR}/src")
+        src "${DOLRECOMP_DIR}")
 add_test(NAME botw_cemu_layout COMMAND botw_cemu_layout_test)
 add_test(
     NAME botw_rpx_load

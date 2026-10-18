@@ -17,6 +17,7 @@ static WiiUAudioBuffer g_buffer;
 static WAVEHDR g_headers[AUDIO_DEVICE_BUFFERS];
 static int16_t g_samples[AUDIO_DEVICE_BUFFERS][AUDIO_DEVICE_FRAMES * 2];
 static bool g_queued[AUDIO_DEVICE_BUFFERS], g_muted;
+static bool g_silent_playback;
 static ULONGLONG g_stats_time;
 static uint64_t g_stats_frames;
 
@@ -32,6 +33,9 @@ static DWORD WINAPI output_thread(void* unused) {
             AcquireSRWLockExclusive(&g_lock);
             wiiu_audio_buffer_read(&g_buffer, g_samples[i], AUDIO_DEVICE_FRAMES);
             ReleaseSRWLockExclusive(&g_lock);
+            /* Exercise the real device cadence and underrun handling during
+               unattended tests without emitting the game's samples. */
+            if (g_silent_playback) memset(g_samples[i], 0, sizeof(g_samples[i]));
             MMRESULT result = waveOutWrite(g_wave_out, &g_headers[i], sizeof(g_headers[i]));
             if (result != MMSYSERR_NOERROR) {
                 fprintf(stderr, "audio: waveOutWrite failed (%u)\n", (unsigned)result);
@@ -47,7 +51,9 @@ static DWORD WINAPI output_thread(void* unused) {
 bool wiiu_audio_init(uint32_t sample_rate) {
     if (g_wave_out || g_muted) return true;
     const char* mute = getenv("BOTW_MUTE");
-    if (mute && strcmp(mute, "1") == 0) {
+    const char* silent = getenv("BOTW_AUDIO_SILENT_PLAYBACK");
+    g_silent_playback = silent && strcmp(silent, "1") == 0;
+    if (mute && strcmp(mute, "1") == 0 && !g_silent_playback) {
         g_muted = true;
         fprintf(stderr, "audio: host output muted (guest audio remains active)\n");
         return true;
@@ -85,6 +91,7 @@ bool wiiu_audio_init(uint32_t sample_rate) {
     if (!g_thread) goto failed;
     SetThreadPriority(g_thread, THREAD_PRIORITY_ABOVE_NORMAL);
     fprintf(stderr, "audio: native Windows output opened (%u Hz stereo, independent playback, adaptive reserve)\n", sample_rate);
+    if (g_silent_playback) fprintf(stderr, "audio: silent playback diagnostics (device receives zeroes)\n");
     return true;
 failed:
     wiiu_audio_shutdown();
@@ -125,6 +132,7 @@ void wiiu_audio_shutdown(void) {
     }
     if (g_wake) { CloseHandle(g_wake); g_wake = NULL; }
     if (g_stop) { CloseHandle(g_stop); g_stop = NULL; }
+    g_silent_playback = false;
 }
 #else
 bool wiiu_audio_init(uint32_t sample_rate) { (void)sample_rate; return false; }

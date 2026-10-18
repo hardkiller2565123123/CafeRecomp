@@ -6,7 +6,7 @@
  * Commit: 13d1826b4d018c2b6674f58b9b772e21ba084f61
  *
  * This is a deliberately small C adaptation for the standalone recomp
- * renderer. The full Cemu renderer remains in third_party/Cemu.
+ * renderer. Original dependency checkouts are retained under build/archive.
  */
 
 #include "wiiu_gx2_cemu_layout.h"

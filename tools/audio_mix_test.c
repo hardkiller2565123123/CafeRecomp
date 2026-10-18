@@ -99,7 +99,22 @@ int main(void) {
         CHECK(captures==previous+1);
         for(u32 i=0;i<96;++i)CHECK(captured[i][0]==(s32)((block*96+i)*64) && captured[i][1]==captured[i][0]);
     }
+    /* Loading pauses inside the host reserve must not discard guest audio
+       time. At fixed timebase, catch up exactly once and then stop mixing. */
+    for(u32 stall=30;stall<=60;stall+=30) {
+        u32 previous=captures;
+        cpu.timebase+=(u64)stall*186469u;
+        for(u32 i=0;i<2048;++i)wiiu_imports_run_audio(&cpu,4);
+        CHECK(captures==previous+stall);
+        for(u32 i=0;i<32;++i)wiiu_imports_run_audio(&cpu,4);
+        CHECK(captures==previous+stall);
+    }
+    /* A multi-second pause must not flood playback with stale audio. */
+    u32 previous=captures;cpu.timebase+=62156250ull*2;
+    for(u32 i=0;i<2048;++i)wiiu_imports_run_audio(&cpu,4);
+    CHECK(captures==previous+1);
     CHECK(!memory.unmapped_read_count && !memory.unmapped_write_count);
+    fprintf(stderr,"AX timing: 90/180 ms stalls recovered; long-pause backlog bounded\n");
     fprintf(stderr,"AX stereo: distinct L/R, centered mono, surround order, channel ramps and invalid matrices passed\n");
 cleanup:
     call(&cpu,QUIT);

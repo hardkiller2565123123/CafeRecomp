@@ -230,10 +230,7 @@ static u8 select_texture_component(const u8 rgba[4], u32 selector) {
 
 static void apply_texture_component_map(const WiiUGX2TextureView* texture,
                                         u8 color[4]) {
-    /* GX2Texture::compSel is encoded as X/Y/Z/W selectors in byte lanes. */
-    if (texture->comp_map == 0u)
-        return;
-
+    /* Zero is a valid R/R/R/R swizzle, including red-channel alpha masks. */
     u8 rgba[4] = {color[2], color[1], color[0], color[3]};
     u8 mapped[4] = {
         select_texture_component(rgba, (texture->comp_map >> 24u) & 7u),
@@ -342,6 +339,20 @@ static bool sample_texture(const u8* data,
         output[0] = 0u;
         output[3] = 255u;
         break;
+    case 0x05: /* R16_UNORM: depth/lookup data used by scene passes. */
+        if(texture->format!=0x05)return false;
+        output[2]=(u8)(((u32)read_le16(source)*255u+32767u)/65535u);
+        output[0]=output[1]=0;output[3]=255;
+        break;
+    case 0x19: { /* R10_G10_B10_A2_UNORM, little-endian packed channels. */
+        if(texture->format!=0x19)return false;
+        u32 packed=read_le32(source);
+        output[2]=(u8)(((packed&1023u)*255u+511u)/1023u);
+        output[1]=(u8)((((packed>>10)&1023u)*255u+511u)/1023u);
+        output[0]=(u8)((((packed>>20)&1023u)*255u+511u)/1023u);
+        output[3]=(u8)((packed>>30)*85u);
+        break;
+    }
     case 0x08:
         decode_r5g6b5(read_le16(source), output);
         break;
@@ -393,6 +404,10 @@ static float half_float(u16 h) {
 static bool float_texel(const u8* data,const WiiUGX2TextureView* t,u32 x,u32 y,float out[4]) {
     unsigned channels=0,bytes=0;
     switch(t->format) {
+    case 0x05:channels=1;bytes=2;break;
+    case 0x1f:channels=4;bytes=2;break;
+    case 0x19:channels=1;bytes=4;break;
+    case 0x816:channels=1;bytes=4;break;
     case 0x806:channels=1;bytes=2;break;
     case 0x810:channels=2;bytes=2;break;
     case 0x820:channels=4;bytes=2;break;
@@ -413,8 +428,19 @@ static bool float_texel(const u8* data,const WiiUGX2TextureView* t,u32 x,u32 y,f
     if(offset>t->image_size || channels*bytes>t->image_size-offset)return false;
     float rgba[4]={0,0,0,1};
     for(unsigned c=0;c<channels;++c) {
-        if(bytes==2)rgba[c]=half_float(read_le16(data+offset+c*2));
+        if(t->format==0x05 || t->format==0x1f)rgba[c]=read_le16(data+offset+c*2)/65535.0f;
+        else if(bytes==2)rgba[c]=half_float(read_le16(data+offset+c*2));
         else {u32 bits=read_le32(data+offset+c*4);memcpy(&rgba[c],&bits,4);}
+    }
+    if(t->format==0x19) {
+        u32 packed=read_le32(data+offset);
+        for(unsigned c=0;c<3;++c)rgba[c]=((packed>>(c*10))&1023)/1023.0f;
+        rgba[3]=(packed>>30)/3.0f;
+    } else if(t->format==0x816) {
+        u32 packed=read_le32(data+offset);
+        rgba[0]=half_float((u16)((packed&2047)<<4));
+        rgba[1]=half_float((u16)(((packed>>11)&2047)<<4));
+        rgba[2]=half_float((u16)((packed>>22)<<5));
     }
     for(unsigned c=0;c<4;++c) {
         unsigned sel=(t->comp_map>>((3-c)*8))&255;
@@ -423,6 +449,14 @@ static bool float_texel(const u8* data,const WiiUGX2TextureView* t,u32 x,u32 y,f
     }
     return true;
 }
+bool wiiu_gx2_software_decode_float(CPUState* cpu,const WiiUGX2TextureView* t,float* rgba) {
+    if(!cpu || !t || !rgba || !t->width || !t->height || t->width>8192 || t->height>8192)return false;
+    const u8* data=texture_data(cpu,t);if(!data)return false;
+    for(u32 y=0;y<t->height;++y)for(u32 x=0;x<t->width;++x)
+        if(!float_texel(data,t,x,y,rgba+((size_t)y*t->width+x)*4))return false;
+    return true;
+}
+
 static int sample_address(int coordinate,int extent,unsigned mode) {
     if(mode==0){coordinate%=extent;return coordinate<0?coordinate+extent:coordinate;}
     if(mode==1){int period=extent*2;coordinate%=period;if(coordinate<0)coordinate+=period;return coordinate<extent?coordinate:period-1-coordinate;}
@@ -433,7 +467,9 @@ static int sample_address(int coordinate,int extent,unsigned mode) {
 static bool sample_float_data(const u8* data,unsigned native_layout,const WiiUGX2TextureView* t,
     u32 word,float u,float v,float out[4]) {
     if(!data || !t || !out || !t->width || !t->height || t->width>65536 || t->height>65536 ||
-       t->depth!=1 || t->first_slice || !isfinite(u) || !isfinite(v) || fabsf(u)>16384 || fabsf(v)>16384)return false;
+       !t->depth || t->first_slice>=t->depth ||
+       (native_layout && (t->depth!=1 || t->first_slice)) ||
+       !isfinite(u) || !isfinite(v) || fabsf(u)>16384 || fabsf(v)>16384)return false;
     unsigned mx=word&7,my=(word>>3)&7,mag=(word>>9)&7,min=(word>>12)&7,border=(word>>22)&3;
     if((mx>3 && mx!=6) || (my>3 && my!=6) || border==3 ||
        (mag!=0 && mag!=1 && mag!=4 && mag!=5) || (min!=0 && min!=1 && min!=4 && min!=5))return false;

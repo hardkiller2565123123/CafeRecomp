@@ -192,6 +192,9 @@ typedef struct {
     u32 wait_fast_mutex;
     u32 wait_semaphore;
     u32 wait_mutex;
+    u32 wait_thread;
+    u32 exit_value;
+    bool joined;
     bool sleeping;
     u64 wake_tick;
     u32 ready_event;
@@ -295,6 +298,7 @@ static u32 g_boot_history_count;
 /* Opt-in integration diagnostic: one ordinary GamePad A press after a chosen
    number of rendered-frame input samples. Never enabled by normal launches. */
 static u32 g_test_start_sample;
+static u32 g_test_a_samples[8],g_test_a_count;
 static bool g_test_start_pro;
 static bool g_pro_controller_input;
 static u32 g_test_input_samples;
@@ -566,6 +570,15 @@ void wiiu_imports_reset_stats(void) {
     g_boot_history_count = 0;
     const char* test_start = getenv("BOTW_TEST_START_SAMPLE");
     g_test_start_sample = test_start ? (u32)strtoul(test_start, NULL, 0) : 0u;
+    memset(g_test_a_samples,0,sizeof(g_test_a_samples));g_test_a_count=0;
+    const char* sequence=getenv("BOTW_TEST_A_SAMPLES");
+    while(sequence && *sequence && g_test_a_count<8) {
+        char* end=NULL;unsigned long sample=strtoul(sequence,&end,10);
+        if(end==sequence || !sample || sample>UINT32_MAX-3u)break;
+        g_test_a_samples[g_test_a_count++]=(u32)sample;
+        if(*end!=',')break;
+        sequence=end+1;
+    }
     const char* test_pro = getenv("BOTW_TEST_START_PRO");
     g_test_start_pro = test_pro && strcmp(test_pro, "1") == 0;
     const char* controller = getenv("BOTW_CONTROLLER");
@@ -3605,6 +3618,19 @@ static HostThread* record_host_thread(CPUState* cpu, u32 object, u32 entry,
         return NULL;
 
     HostThread* thread = find_host_thread(object);
+    if (thread && thread->tls_initialized && getenv("BOTW_TRACE_HAVOK")) {
+        u32 sp = cpu->gpr[1];
+        for (unsigned i=0;i<10 && guest_range_mapped(cpu,sp,8);++i) {
+            fprintf(stderr,"thread-recreate-stack: object=%08X sp=%08X lr=%08X\n",object,sp,safe_read32(cpu,sp+4));
+            u32 next=safe_read32(cpu,sp);if(next<=sp)break;sp=next;
+        }
+    }
+    if (getenv("BOTW_TRACE_HAVOK"))
+        fprintf(stderr,"thread-create: object=%08X entry=%08X caller=%08X reuse=%u current=%08X tls=%u completed=%u resumed=%u pc=%08X\n",
+                object,entry,cpu->lr,thread!=NULL,
+                g_running_host_thread?g_running_host_thread->object:0,
+                thread?thread->tls_initialized:0, thread?thread->completed:0,
+                thread?thread->resumed:0, thread?thread->cpu.pc:0);
     if (!thread) {
         if (g_host_thread_count >= HOST_THREAD_LIMIT) {
             fprintf(stderr, "coreinit: thread capacity exhausted count=%u object=%08X entry=%08X caller=%08X\n",
@@ -3829,6 +3855,13 @@ static bool handle_coreinit_import(CPUState* cpu, const char* name) {
 
     if (name_equals(name, "__tls_get_addr")) {
         cpu->gpr[3] = guest_thread_tls_address(cpu, cpu->gpr[3]);
+        if (g_running_host_thread && g_running_host_thread-g_host_threads == 30 &&
+            getenv("BOTW_TRACE_HAVOK")) {
+            static unsigned tls_traces;
+            if (tls_traces++ < 128)
+                fprintf(stderr,"havok-tls: thread=%08X caller=%08X address=%08X value=%08X\n",
+                    g_running_host_thread->object,cpu->lr,cpu->gpr[3],safe_read32(cpu,cpu->gpr[3]));
+        }
         log_import_once(cpu->pc, name, true);
         return_to_lr(cpu);
         return true;
@@ -3929,9 +3962,27 @@ static bool handle_coreinit_import(CPUState* cpu, const char* name) {
 
     if (name_equals(name, "OSJoinThread")) {
         HostThread* thread = find_host_thread(cpu->gpr[3]);
-        bool joined = thread && thread->completed;
+        bool joinable = thread && thread != g_running_host_thread &&
+                        !(thread->attributes & 8u) && !thread->joined;
+        if (joinable && !thread->completed) {
+            /* Preserve the import and arguments until the target exits.
+               Returning false here lets destructors free a live worker's
+               stack, queues and TLS owner before its final job finishes. */
+            if (g_running_host_thread) {
+                g_running_host_thread->blocked = true;
+                g_running_host_thread->wait_thread = thread->object;
+                g_running_host_thread->wait_pc = cpu->pc;
+                cpu->pc = HOST_THREAD_YIELD_ADDRESS;
+            }
+            return true;
+        }
+        bool joined = joinable && thread->completed;
         if (joined && guest_range_mapped(cpu, cpu->gpr[4], 4u))
-            mem_write32(cpu, cpu->gpr[4], 0u);
+            mem_write32(cpu, cpu->gpr[4], thread->exit_value);
+        if (joined) {
+            thread->joined = true;
+            mem_write8(cpu, thread->object + 0x324u, 0u);
+        }
         cpu->gpr[3] = joined ? 1u : 0u;
         log_import_once(cpu->pc, name, true);
         return_to_lr(cpu);
@@ -4278,6 +4329,7 @@ static bool handle_coreinit_import(CPUState* cpu, const char* name) {
 
     if (name_contains(name, "OSExitThread") && g_running_host_thread) {
         release_current_fast_mutexes(cpu);
+        g_running_host_thread->exit_value = cpu->gpr[3];
         g_running_host_thread->completed = true;
         g_running_host_thread->resumed = false;
         cpu->pc = HOST_THREAD_RETURN_ADDRESS;
@@ -4358,10 +4410,14 @@ static bool handle_coreinit_import(CPUState* cpu, const char* name) {
         u32* values = g_running_host_thread
                           ? g_running_host_thread->thread_specific
                           : g_thread_specific;
-        if (values[index] == 0)
+        /* An unset slot is NULL, not an allocated object. Guest libraries
+           use this to decide whether per-thread initialization is needed.
+           Keep the old framework bootstrap adapter limited to its callers. */
+        bool framework_bootstrap = cpu->lr == 0x0237CA1Cu ||
+                                   cpu->lr == 0x0237CB54u || cpu->lr == 0x0237CB9Cu;
+        if (framework_bootstrap && values[index] == 0)
             values[index] = thread_specific_fallback_address(index);
-        if ((cpu->lr == 0x0237CA1Cu || cpu->lr == 0x0237CB54u ||
-             cpu->lr == 0x0237CB9Cu) &&
+        if (framework_bootstrap &&
             guest_range_mapped(cpu, values[index] + 112u, 4u) &&
             mem_read32(cpu, values[index] + 112u) == 0) {
             initialize_framework_root(cpu);
@@ -4986,6 +5042,7 @@ static bool handle_coreinit_import(CPUState* cpu, const char* name) {
     }
 
     if (name_contains(name, "GX2InitTextureRegs")) {
+        wiiu_gx2_handle_import(cpu, name);
         log_import_once(cpu->pc, name, true);
         return_to_lr(cpu);
         return true;
@@ -5111,14 +5168,19 @@ static void write_virtual_pro_status(CPUState* cpu, u32 data) {
 
     if (g_test_start_sample && g_test_start_pro && wiiu_gx2_has_active_frame()) {
         u32 sample = g_test_input_samples + 1u; /* KPAD is polled before VPAD. */
-        if (sample >= g_test_start_sample && sample < g_test_start_sample + 3u) {
+        u32 pulse=g_test_start_sample;
+        for(u32 i=0;i<g_test_a_count;++i)
+            if(sample>=g_test_a_samples[i] && sample<=g_test_a_samples[i]+3u) {
+                pulse=g_test_a_samples[i];break;
+            }
+        if (sample >= pulse && sample < pulse + 3u) {
             held |= 0x8000u;
             released &= ~0x8000u;
-            if (sample == g_test_start_sample) {
+            if (sample == pulse) {
                 pressed |= 0x8000u;
                 fprintf(stderr, "test-start: Pro press A sample=%u\n", sample);
             }
-        } else if (sample == g_test_start_sample + 3u) {
+        } else if (sample == pulse + 3u) {
             released |= 0x8000u;
             fprintf(stderr, "test-start: Pro release A\n");
         }
@@ -7304,6 +7366,85 @@ static bool handle_erreula_host_call(CPUState* cpu, u32 address) {
 }
 
 bool wiiu_imports_host_call(CPUState* cpu, u32 address) {
+    if (address == 0x03F92140u && getenv("BOTW_TRACE_HAVOK")) {
+        fprintf(stderr,"havok-router-set: thread=%08X router=%08X caller=%08X\n",
+            g_running_host_thread?g_running_host_thread->object:0,cpu->gpr[3],cpu->lr);
+        u32 sp=cpu->gpr[1];
+        for(unsigned i=0;i<8 && guest_range_mapped(cpu,sp,8);++i) {
+            fprintf(stderr,"havok-router-stack: sp=%08X lr=%08X\n",sp,safe_read32(cpu,sp+4));
+            u32 next=safe_read32(cpu,sp);if(next<=sp)break;sp=next;
+        }
+    }
+    static u32 physics_loader_thread;
+    if (address == 0x041CE4ACu && g_running_host_thread &&
+        !safe_read32(cpu,GUEST_THREAD_TLS_BASE +
+            (u32)(g_running_host_thread-g_host_threads)*GUEST_THREAD_TLS_SLOT_SIZE + 4u))
+        physics_loader_thread = g_running_host_thread->object;
+    if (((cpu->lr>=0x041CE4ACu && cpu->lr<=0x041CEE24u) ||
+         address==0x041CE4ACu) && getenv("BOTW_TRACE_HAVOK")) {
+        static u32 loader_steps;
+        const char* trace_thread = getenv("BOTW_TRACE_HAVOK_THREAD");
+        u32 selected_thread = trace_thread && strcmp(trace_thread, "physics") == 0
+                                  ? physics_loader_thread
+                                  : trace_thread ? (u32)strtoul(trace_thread, NULL, 0) : 0u;
+        bool waiting_for_physics = trace_thread && strcmp(trace_thread, "physics") == 0 && !selected_thread;
+        if (!waiting_for_physics && (!selected_thread || (g_running_host_thread &&
+             g_running_host_thread->object == selected_thread)) && loader_steps++<4096) {
+            u32 slot=g_running_host_thread?(u32)(g_running_host_thread-g_host_threads):GUEST_MAIN_TLS_SLOT;
+            u32 tls=GUEST_THREAD_TLS_BASE+slot*GUEST_THREAD_TLS_SLOT_SIZE;
+            fprintf(stderr,"havok-step: pc=%08X lr=%08X thread=%08X sp=%08X rootOffset=%08X r3=%08X r4=%08X r25=%08X r26=%08X r27=%08X r31=%08X tls=%08X,%08X,%08X\n",
+                address,cpu->lr,g_running_host_thread?g_running_host_thread->object:0,
+                cpu->gpr[1],safe_read32(cpu,cpu->gpr[1]+8),cpu->gpr[3],cpu->gpr[4],
+                cpu->gpr[25],cpu->gpr[26],cpu->gpr[27],cpu->gpr[31],
+                safe_read32(cpu,tls),safe_read32(cpu,tls+4),safe_read32(cpu,tls+8));
+        }
+    }
+    /* Trace packfile relocation without changing the loader or its result. */
+    if ((address==0x041CE4ACu || address==0x0380DF78u || address==0x041CF084u) &&
+        getenv("BOTW_TRACE_HAVOK")) {
+        static u32 traces;
+        /* Ordinary class lookups repeat thousands of times. Always retain a
+           lookup handed a packfile header instead of a relocated root. */
+        bool header=safe_read32(cpu,cpu->gpr[3])==0x57E0E057u;
+        if((address!=0x041CF084u || header) && traces++<4096) {
+            u32 object=cpu->gpr[3];
+            fprintf(stderr,"havok-load: pc=%08X lr=%08X object=%08X r4=%08X thread=%08X\n",
+                address,cpu->lr,object,cpu->gpr[4],g_running_host_thread?g_running_host_thread->object:0);
+            for(u32 at=0;at<256 && guest_range_mapped(cpu,object+at,16);at+=16)
+                fprintf(stderr,"havok-load: +%03X %08X %08X %08X %08X\n",at,
+                    safe_read32(cpu,object+at),safe_read32(cpu,object+at+4),
+                    safe_read32(cpu,object+at+8),safe_read32(cpu,object+at+12));
+        }
+    }
+    /* Capture the origin of guest aborts before the C runtime unwinds its
+       stack. Opt-in only; this does not suppress errors or skip guest work. */
+    if ((address == 0x0420EA64u || address == 0x0434D1B8u ||
+         (address == 0x0420CEB4u && !cpu->gpr[3])) &&
+        getenv("BOTW_TRACE_ABORT")) {
+        fprintf(stderr,"guest-abort: pc=%08X lr=%08X thread=%08X r3=%08X r4=%08X r5=%08X\n",
+                address,cpu->lr,g_running_host_thread?g_running_host_thread->object:0,
+                cpu->gpr[3],cpu->gpr[4],cpu->gpr[5]);
+        for(u32 r=14;r<32;++r) {
+            u32 value=cpu->gpr[r];
+            fprintf(stderr,"guest-abort: r%u=%08X words=%08X,%08X,%08X,%08X\n",
+                r,value,safe_read32(cpu,value),safe_read32(cpu,value+4),
+                safe_read32(cpu,value+8),safe_read32(cpu,value+12));
+        }
+        u32 object=cpu->gpr[4];
+        if(address==0x0420CEB4u && guest_range_mapped(cpu,object,64)) {
+            for(u32 at=0;at<64;at+=16)fprintf(stderr,
+                "guest-abort: object+%X=%08X,%08X,%08X,%08X\n",at,
+                safe_read32(cpu,object+at),safe_read32(cpu,object+at+4),
+                safe_read32(cpu,object+at+8),safe_read32(cpu,object+at+12));
+        }
+        u32 sp=cpu->gpr[1];
+        for(u32 depth=0;depth<16 && guest_range_mapped(cpu,sp,8);++depth) {
+            fprintf(stderr,"guest-abort: stack[%u] sp=%08X lr=%08X\n",depth,sp,safe_read32(cpu,sp+4));
+            u32 next=safe_read32(cpu,sp);
+            if(next<=sp)break;
+            sp=next;
+        }
+    }
     if (g_test_start_sample && address == 0x03A3B93Cu && cpu->lr == 0x02F8DE94u) {
         g_test_start_animation = cpu->gpr[3];
         g_test_start_screen = cpu->gpr[31];
@@ -7535,6 +7676,7 @@ bool wiiu_imports_host_call(CPUState* cpu, u32 address) {
         return false;
 
     if (address == HOST_THREAD_RETURN_ADDRESS && g_running_host_thread) {
+        g_running_host_thread->exit_value = cpu->gpr[3];
         g_running_host_thread->completed = true;
         g_running_host_thread->resumed = false;
         return false;
@@ -8070,6 +8212,14 @@ void wiiu_imports_run_resumed_threads(CPUState* main_cpu,
         HostThread* thread = &g_host_threads[i];
         if (!thread->resumed || thread->completed)
             continue;
+        if (thread->wait_thread) {
+            HostThread* target = find_host_thread(thread->wait_thread);
+            if (!target || target->completed || target->joined || (target->attributes & 8u)) {
+                thread->wait_thread = 0u;
+                thread->blocked = false;
+                thread->cpu.pc = thread->wait_pc;
+            }
+        }
         if (thread->sleeping &&
             (s64)(thread->cpu.timebase - thread->wake_tick) >= 0) {
             thread->sleeping = false;
@@ -8254,13 +8404,12 @@ void wiiu_imports_run_audio(CPUState* main_cpu, u32 callback_blocks) {
                 return;
             const u64 frame_ticks =
                 (62156250ull * AX_MIX_FRAMES + 31999ull) / 32000ull;
-            /* Keep small scheduler jitter from permanently lowering the
-               sample rate. Rebase only after a long stall, so catch-up is
-               bounded below the 64 ms native prebuffer instead of a
-               multi-second burst. Dropping time after only 12 ms discarded
-               samples during ordinary resource-loading scheduler stalls. */
+            /* Preserve audio through stalls that the adaptive device reserve
+               can cover (192 ms). Rebasing after 60 ms permanently discarded
+               audio time even with 192 ms queued, draining the reserve during
+               repeated loading stalls. Still discard multi-second backlog. */
             if (!g_ax_frame_clock_started ||
-                main_cpu->timebase - g_ax_next_frame_tick >= frame_ticks * 20u)
+                main_cpu->timebase - g_ax_next_frame_tick >= frame_ticks * 64u)
                 g_ax_next_frame_tick = main_cpu->timebase + frame_ticks;
             else
                 g_ax_next_frame_tick += frame_ticks;
